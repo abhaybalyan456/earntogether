@@ -1,0 +1,1079 @@
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const low = require('lowdb');
+const FileSync = require('lowdb/adapters/FileSync');
+const { v4: uuidv4 } = require('uuid');
+const TelegramBot = require('node-telegram-bot-api');
+const rateLimit = require('express-rate-limit');
+
+const adapter = new FileSync('db.json');
+const db = low(adapter);
+
+// Set defaults for the database
+db.defaults({ users: [], activities: [], claims: [], payouts: [] }).write();
+
+const app = express();
+const SECRET_KEY = 'nexlink-secret-key-pulse-vault'; // Use environment variable in production
+
+// --- SECURITY: RATE LIMITING (For High Traffic) ---
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // Very high for testing
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+const submissionLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 15,
+    message: { error: 'Spam Protection: Maximum 15 claims per hour allowed.' },
+    validate: { xForwardedForHeader: false }
+});
+
+app.use(apiLimiter); // Apply to all requests
+
+app.use(cors());
+app.use(bodyParser.json({ limit: '500mb' }));
+app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
+
+// Debug Middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
+// --- TELEGRAM BOT CONFIG ---
+const BOT_TOKEN = '8557258761:AAEW86mB6roop4mX40ezfzCfn-5Z_nhfcOs';
+const ADMIN_CHAT_ID = '1889181876';
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// --- TELEGRAM BOT LOGIC ---
+
+// Helper: Send formatted message to Admin
+const notifyAdmin = async (message, options = {}) => {
+    try {
+        await bot.sendMessage(ADMIN_CHAT_ID, message, { parse_mode: 'HTML', ...options });
+    } catch (err) {
+        console.error('[TELEGRAM ERROR]', err.message);
+    }
+};
+
+// COMMAND: /start
+bot.onText(/\/start/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const menu = `🛡 <b>GROW TOGETHER ADMIN v9.0</b> 🛡\n\nHigh-Traffic Mode: ACTIVE\n\n<b>Commands:</b>\n/claims - Review pending orders\n/payouts - Review money requests\n/users - List top performers\n/stats - System health & profit\n/search [name] - Find user data`;
+    bot.sendMessage(ADMIN_CHAT_ID, menu, { parse_mode: 'HTML' });
+});
+
+// COMMAND: /purge_all_claims
+bot.onText(/\/purge_all_claims/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    bot.sendMessage(ADMIN_CHAT_ID, "⚠️ <b>GLOBAL WIPE?</b> This will delete EVERY claim in the system (Pending & Approved). Type 'YES ALL' to confirm.", { parse_mode: 'HTML' });
+    bot.once('message', (confirmMsg) => {
+        if (confirmMsg.text === 'YES ALL') {
+            db.set('claims', []).write();
+            bot.sendMessage(ADMIN_CHAT_ID, "💥 <b>GLOBAL PURGE SUCCESSFUL:</b> All claims have been erased from history.");
+        } else {
+            bot.sendMessage(ADMIN_CHAT_ID, "Global purge aborted.");
+        }
+    });
+});
+
+// COMMAND: /payouts
+bot.onText(/\/payouts/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const users = db.get('users').value();
+    const payables = users.filter(u => (u.pendingPayout || 0) > 0);
+
+    if (payables.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "🏧 <b>No pending withdrawal distributions.</b> Everyone is fully paid!");
+
+    let text = `🏧 <b>PROFIT WITHDRAWAL QUEUE:</b>\n\n`;
+    payables.forEach((u, i) => {
+        text += `${i + 1}. 👤 <b>${u.username}</b>\n`;
+        text += `   ⏳ <b>Payable:</b> ₹${u.pendingPayout.toFixed(2)}\n`;
+        text += `   💳 <b>UPI:</b> <code>${u.paymentSettings?.upi || 'NONE'}</code>\n\n`;
+    });
+
+    text += `<i>Use /search [username] to send payments.</i>`;
+    bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML' });
+});
+
+// COMMAND: /stats
+bot.onText(/\/stats/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const users = db.get('users').value();
+    const claims = db.get('claims').value();
+    const payouts = db.get('payouts').value();
+
+    const totalPending = users.reduce((sum, u) => sum + (u.pendingPayout || 0), 0);
+    const usersToPay = users.filter(u => (u.pendingPayout || 0) > 0).length;
+    const pendingClaims = claims.filter(c => c.status === 'pending').length;
+    const totalProfit = claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (c.profitAmount || 0), 0);
+
+    const stats = `📊 <b>VAULT PERFORMANCE:</b>\n\n` +
+        `👥 <b>Total Users:</b> ${users.length}\n` +
+        `⏳ <b>Total Pending Withdrawal:</b> ₹${totalPending.toFixed(2)}\n` +
+        `🏧 <b>Pending Distributions:</b> ${usersToPay} users\n` +
+        `💎 <b>Lifetime Profit Released:</b> ₹${totalProfit.toFixed(2)}\n` +
+        `📂 <b>Pending Reviews:</b> ${pendingClaims}`;
+    notifyAdmin(stats);
+});
+
+// COMMAND: /users
+bot.onText(/\/users/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+
+    const allUsers = db.get('users').value();
+    const allActivities = db.get('activities').value();
+    const allClaims = db.get('claims').value();
+
+    const usersWithStats = allUsers.map(u => {
+        const activityCount = allActivities.filter(a => a.userId === u.id).length;
+        const userClaims = allClaims.filter(c => c.userId === u.id);
+        const claimCount = userClaims.length;
+        const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
+        // Activity Score: Points for clicks, claims, and successful verifications
+        const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
+
+        return {
+            username: u.username,
+            pendingPayout: u.pendingPayout || 0,
+            trustScore: u.trustScore || 0,
+            activityCount,
+            claimCount,
+            verifiedCount,
+            activityScore
+        };
+    });
+
+    // Sort by Activity Score (just like website)
+    const topUsers = usersWithStats.sort((a, b) => b.activityScore - a.activityScore).slice(0, 10);
+
+    let text = `🏆 <b>POWER USERS (Top 10):</b>\n\n`;
+    topUsers.forEach((u, i) => {
+        text += `${i + 1}. <b>${u.username}</b>\n`;
+        text += `   ⏳ Pend: ₹${u.pendingPayout.toFixed(2)} | 💎 Karma: ${u.trustScore}\n`;
+        text += `   🔥 Score: ${u.activityScore} | 📊 Activity: ${u.activityCount}\n`;
+        text += `   ✅ Verified: ${u.verifiedCount}/${u.claimCount}\n\n`;
+    });
+
+    if (topUsers.length === 0) text = "📭 No users found in database.";
+
+    notifyAdmin(text);
+});
+
+// COMMAND: /search [username]
+bot.onText(/\/search (.+)/, (msg, match) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const searchTerm = match[1].toLowerCase();
+    const user = db.get('users').find(u => u.username.toLowerCase() === searchTerm).value();
+
+    if (!user) return notifyAdmin(`❌ User <b>${searchTerm}</b> not found.`);
+
+    const claims = db.get('claims').filter({ userId: user.id }).value();
+    const text = `👤 <b>USER PROFILE: ${user.username}</b>\n\n` +
+        `📈 <b>Lifetime Profit:</b> ₹${(user.totalEarnings || 0).toFixed(2)}\n` +
+        `⏳ <b>Pending Payout:</b> ₹${(user.pendingPayout || 0).toFixed(2)}\n` +
+        `💎 <b>Karma:</b> ${user.trustScore || 0}\n` +
+        `💳 <b>UPI:</b> <code>${user.paymentSettings?.upi || 'NONE'}</code>\n` +
+        `📅 <b>Joined:</b> ${new Date(user.createdAt).toLocaleDateString()}\n` +
+        `📦 <b>Orders:</b> ${claims.length}`;
+
+    notifyAdmin(text, {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: "📈 Edit Profit", callback_data: `edit_earnings:${user.id}` },
+                    { text: "💸 Send Pay", callback_data: `edit_pending:${user.id}` },
+                    { text: "💰 Send Withdraw", callback_data: `send_withdraw:${user.id}` }
+                ],
+                [
+                    { text: "💎 Edit Karma", callback_data: `edit_karma:${user.id}` },
+                    { text: "👤 Edit Identity", callback_data: `rename_user:${user.id}` }
+                ],
+                [
+                    { text: "💳 Edit UPI", callback_data: `edit_upi:${user.id}` },
+                    { text: "🗑 Purge Claims", callback_data: `purge_claims:${user.id}` },
+                    { text: "📜 Purge History", callback_data: `purge_history:${user.id}` }
+                ],
+                [
+                    { text: "💹 Purge Profit", callback_data: `purge_profit:${user.id}` },
+                    { text: "💸 Purge Pending", callback_data: `purge_pending:${user.id}` }
+                ],
+                [
+                    { text: "☢️ Purge Account", callback_data: `delete_user:${user.id}` }
+                ]
+            ]
+        }
+    });
+});
+
+// List Claims Command
+bot.onText(/\/claims/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const pending = db.get('claims').filter({ status: 'pending' }).value();
+    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending claims to review.");
+
+    bot.sendMessage(ADMIN_CHAT_ID, `📂 <b>PENDING REVIEWS:</b> ${pending.length} orders found.`);
+    pending.forEach(c => {
+        const user = db.get('users').find({ id: c.userId }).value();
+        const text = `👤 <b>USER:</b> ${c.username}\n📦 <b>STORE:</b> ${c.platform}\n🆔 <b>ORDER:</b> <code>${c.orderId}</code>\n💰 <b>AMOUNT:</b> ₹${c.amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>`;
+
+        const options = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "✅ APPROVE", callback_data: `approve_claim:${c.id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${c.id}` }],
+                    [{ text: "🗑 DELETE CLAIM", callback_data: `delete_claim:${c.id}` }]
+                ]
+            }
+        };
+
+        if (c.proofImage) {
+            // Remove the base64 prefix if exists
+            const base64Data = c.proofImage.replace(/^data:image\/\w+;base64,/, "");
+            const buffer = Buffer.from(base64Data, 'base64');
+            bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: text, parse_mode: 'HTML', ...options });
+        } else {
+            bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML', ...options });
+        }
+    });
+});
+
+// List Payouts Command
+bot.onText(/\/payouts/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const pending = db.get('payouts').filter({ status: 'pending' }).value();
+    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending payouts.");
+
+    pending.forEach(p => {
+        const text = `💸 <b>PAYOUT REQUEST</b>\n👤 <b>USER:</b> ${p.username}\n💰 <b>AMOUNT:</b> ₹${p.amount}\n🏦 <b>UPI:</b> <code>${p.upi}</code>`;
+        bot.sendMessage(ADMIN_CHAT_ID, text, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [[{ text: "🤝 MARK PAID", callback_data: `payout_paid:${p.id}` }, { text: "🚫 REJECT", callback_data: `payout_reject:${p.id}` }]]
+            }
+        });
+    });
+});
+
+// Handle Callbacks
+bot.on('callback_query', async (query) => {
+    const data = query.data;
+    const [action, id] = data.split(':');
+
+    // Callback for 'edit_earnings'
+    if (action === 'edit_earnings') {
+        bot.sendMessage(ADMIN_CHAT_ID, "📈 <b>Enter Lifetime Profit (₹):</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const newEarn = parseFloat(msg.text);
+            if (isNaN(newEarn)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+
+            db.get('users').find({ id }).assign({ totalEarnings: newEarn }).write();
+            bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Profit Updated:</b> Cumulative total is now ₹${newEarn.toFixed(2)}`);
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'edit_karma') {
+        bot.sendMessage(ADMIN_CHAT_ID, "💎 <b>Enter New Karma Score:</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const newKarma = parseInt(msg.text);
+            if (isNaN(newKarma)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid score.");
+
+            db.get('users').find({ id }).assign({ trustScore: newKarma }).write();
+            bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Karma Updated:</b> New score is ${newKarma}`);
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'rename_user') {
+        bot.sendMessage(ADMIN_CHAT_ID, "👤 <b>Enter New VAULT IDENTITY:</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const newName = msg.text.trim();
+            if (!newName || newName.length < 3) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Identity name too short.");
+
+            const existing = db.get('users').find({ username: newName }).value();
+            if (existing) return bot.sendMessage(ADMIN_CHAT_ID, "❌ This identity is already active.");
+
+            const user = db.get('users').find({ id }).value();
+            if (user) {
+                db.get('claims').filter({ userId: id }).each(c => { c.username = newName; }).write();
+                db.get('payouts').filter({ userId: id }).each(p => { p.username = newName; }).write();
+                db.get('users').find({ id }).assign({ username: newName }).write();
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>IDENTITY SYNCED:</b> Account is now <b>${newName}</b>`);
+            }
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'send_withdraw') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
+
+        bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>SEND WITHDRAWAL to ${user.username}</b>\n\n<b>Current Pending:</b> ₹${(user.pendingPayout || 0).toFixed(2)}\n<b>UPI:</b> <code>${user.paymentSettings?.upi || 'NONE'}</code>\n\n<b>Enter Amount to SEND (₹):</b>`, { parse_mode: 'HTML' });
+
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) {
+                bot.removeListener('message', handler);
+                return;
+            }
+
+            const amountSent = parseFloat(msg.text);
+            if (isNaN(amountSent) || amountSent <= 0) {
+                bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount. Send a number greater than 0.");
+                return;
+            }
+
+            const freshUser = db.get('users').find({ id }).value();
+            if (!freshUser) return bot.removeListener('message', handler);
+
+            // Calculation
+            const oldBalance = freshUser.pendingPayout || 0;
+            const newBalance = Math.max(0, oldBalance - amountSent);
+            const now = new Date();
+
+            // Record Payout
+            const payoutRec = {
+                id: uuidv4(),
+                userId: id,
+                username: freshUser.username,
+                amount: amountSent,
+                upi: freshUser.paymentSettings?.upi || 'NONE',
+                status: 'paid',
+                requestedAt: now,
+                processedAt: now,
+                adminNote: 'APPROVED PAID'
+            };
+
+            // Save to DB
+            db.get('payouts').push(payoutRec).write();
+            db.get('users').find({ id }).assign({ pendingPayout: newBalance }).write();
+
+            bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n\n👤 User: <b>${freshUser.username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}\n🏦 UPI: <code>${freshUser.paymentSettings?.upi || 'NONE'}</code>\n📅 Time: ${now.toLocaleString()}`, { parse_mode: 'HTML' });
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'edit_pending') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
+
+        const currentBalance = (user.pendingPayout || 0).toFixed(2);
+        bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>CURRENT Pending Withdrawal:</b> ₹${currentBalance}\n\n<b>Enter NEW Pending Withdrawal (₹):</b>\n(Type the final balance the user should see)`, { parse_mode: 'HTML' });
+
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) {
+                bot.removeListener('message', handler);
+                return;
+            }
+
+            const nextBalance = parseFloat(msg.text);
+            if (isNaN(nextBalance)) {
+                bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount. Send a number or /cancel.");
+                return;
+            }
+
+            const freshUser = db.get('users').find({ id }).value();
+            if (!freshUser) return bot.removeListener('message', handler);
+
+            const oldBalance = freshUser.pendingPayout || 0;
+            const paidNow = oldBalance - nextBalance;
+
+            // DIRECT SYNC: SET THE NUMBER
+            db.get('users').find({ id }).assign({ pendingPayout: nextBalance }).write();
+            console.log(`[BOT UPDATE] User ${freshUser.username}: Pending Payout ${oldBalance} -> ${nextBalance}`);
+
+            // HISTORY LOGGING: If balance went down, it means someone was paid
+            if (paidNow > 0) {
+                const payoutRec = {
+                    id: uuidv4(),
+                    userId: id,
+                    username: freshUser.username,
+                    amount: paidNow,
+                    upi: freshUser.paymentSettings?.upi || 'NONE',
+                    status: 'paid',
+                    requestedAt: new Date(),
+                    processedAt: new Date(),
+                    adminNote: 'OFFICIAL PROTOCOL PAYOUT'
+                };
+                db.get('payouts').push(payoutRec).write();
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>VAULT SYNCED:</b>\n\n👤 User: ${freshUser.username}\n💰 Final Balance: ₹${nextBalance.toFixed(2)}\n📑 Ledger Recorded: ₹${paidNow.toFixed(2)} PAID.`, { parse_mode: 'HTML' });
+            } else {
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>BALANCE SET:</b>\n\n👤 User: <b>${freshUser.username}</b>\n💰 New Pending Payout: ₹${nextBalance.toFixed(2)}`, { parse_mode: 'HTML' });
+            }
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'edit_upi') {
+        bot.sendMessage(ADMIN_CHAT_ID, "💳 <b>Enter New UPI ID:</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const upi = msg.text.trim();
+
+            const user = db.get('users').find({ id }).value();
+            const settings = user.paymentSettings || {};
+            db.get('users').find({ id }).assign({ paymentSettings: { ...settings, upi } }).write();
+
+            bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>UPI Updated:</b> New ID is <code>${upi}</code>`, { parse_mode: 'HTML' });
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'approve_claim') {
+        bot.sendMessage(ADMIN_CHAT_ID, "💵 <b>Enter Profit Amount:</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const profit = parseFloat(msg.text);
+            if (isNaN(profit)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+
+            const claim = db.get('claims').find({ id }).value();
+            if (!claim || claim.status !== 'pending') return;
+
+            db.get('claims').find({ id }).assign({ status: 'approved', profitAmount: profit, processedAt: new Date() }).write();
+            const user = db.get('users').find({ id: claim.userId }).value();
+            if (user) {
+                db.get('users').find({ id: user.id }).assign({
+                    totalEarnings: (user.totalEarnings || 0) + profit,
+                    pendingPayout: (user.pendingPayout || 0) + profit,
+                    trustScore: (user.trustScore || 0) + 1
+                }).write();
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>APPROVED:</b> ₹${profit} added to ${user.username}'s pending withdrawal.`);
+            }
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'reject_claim') {
+        bot.sendMessage(ADMIN_CHAT_ID, "📝 <b>Enter reason for rejection:</b>", { parse_mode: 'HTML' });
+        const handler = (msg) => {
+            if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+            if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+            const reason = msg.text;
+
+            const claim = db.get('claims').find({ id }).value();
+            if (!claim || claim.status !== 'pending') return;
+
+            db.get('claims').find({ id }).assign({ status: 'rejected', rejectReason: reason, processedAt: new Date() }).write();
+            const user = db.get('users').find({ id: claim.userId }).value();
+            if (user) {
+                db.get('users').find({ id: user.id }).assign({ trustScore: Math.max(-10, (user.trustScore || 0) - 2) }).write();
+                bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>REJECTED:</b> Notified ${user.username} with reason: ${reason}`);
+            }
+            bot.removeListener('message', handler);
+        };
+        bot.on('message', handler);
+    }
+
+    if (action === 'payout_paid') {
+        const payout = db.get('payouts').find({ id }).value();
+        if (!payout || payout.status !== 'pending') return;
+
+        // Mark as paid in ledger
+        db.get('payouts').find({ id }).assign({
+            status: 'paid',
+            processedAt: new Date(),
+            adminNote: 'APPROVED'
+        }).write();
+
+        // Update user pending payout (LEAVE PROFIT TERM FOR SOURCE)
+        const user = db.get('users').find({ id: payout.userId }).value();
+        if (user) {
+            db.get('users').find({ id: user.id }).assign({
+                pendingPayout: Math.max(0, (user.pendingPayout || 0) - payout.amount)
+            }).write();
+        }
+
+        bot.sendMessage(ADMIN_CHAT_ID, `🤝 <b>PAID & NOTIFIED:</b> ₹${payout.amount} recorded for ${payout.username}.\n📅 Date: ${new Date().toLocaleString()}`);
+    }
+
+    if (action === 'payout_reject') {
+        const payout = db.get('payouts').find({ id }).value();
+        if (!payout || payout.status !== 'pending') return;
+
+        db.get('payouts').find({ id }).assign({ status: 'rejected', processedAt: new Date() }).write();
+        const user = db.get('users').find({ id: payout.userId }).value();
+        if (user) {
+            db.get('users').find({ id: user.id }).assign({ pendingPayout: (user.pendingPayout || 0) + payout.amount }).write();
+            bot.sendMessage(ADMIN_CHAT_ID, `🚫 <b>REJECTED:</b> ₹${payout.amount} returned to ${payout.username}'s pending payout.`);
+        }
+    }
+
+    if (action === 'delete_claim') {
+        db.get('claims').remove({ id }).write();
+        bot.sendMessage(ADMIN_CHAT_ID, "🗑 <b>Claim Deleted</b> successfully.", { parse_mode: 'HTML' });
+    }
+
+    if (action === 'purge_claims') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return;
+        db.get('claims').remove({ userId: id }).write();
+        bot.sendMessage(ADMIN_CHAT_ID, `🗑 All claims for <b>${user.username}</b> have been purged.`, { parse_mode: 'HTML' });
+    }
+
+    if (action === 'purge_history') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return;
+        db.get('payouts').remove({ userId: id }).write();
+        bot.sendMessage(ADMIN_CHAT_ID, `📜 All Withdrawal history for <b>${user.username}</b> has been purged.`, { parse_mode: 'HTML' });
+    }
+
+    if (action === 'purge_profit') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return;
+        db.get('users').find({ id }).assign({ totalEarnings: 0 }).write();
+        bot.sendMessage(ADMIN_CHAT_ID, `💹 Lifetime Profit for <b>${user.username}</b> has been reset to ₹0.00.`, { parse_mode: 'HTML' });
+    }
+
+    if (action === 'purge_pending') {
+        const user = db.get('users').find({ id }).value();
+        if (!user) return;
+        db.get('users').find({ id }).assign({ pendingPayout: 0 }).write();
+        bot.sendMessage(ADMIN_CHAT_ID, `💸 Pending Withdrawal for <b>${user.username}</b> has been reset to ₹0.00.`, { parse_mode: 'HTML' });
+    }
+
+    if (action === 'delete_user') {
+        bot.sendMessage(ADMIN_CHAT_ID, "☢️ <b>Confirm Purge?</b> Type 'YES' to delete user.", { parse_mode: 'HTML' });
+        bot.once('message', (msg) => {
+            if (msg.text === 'YES') {
+                db.get('activities').remove({ userId: id }).write();
+                db.get('claims').remove({ userId: id }).write();
+                db.get('payouts').remove({ userId: id }).write();
+                db.get('users').remove({ id }).write();
+                bot.sendMessage(ADMIN_CHAT_ID, "🧹 Account and history purged successfully.");
+            } else {
+                bot.sendMessage(ADMIN_CHAT_ID, "Operation cancelled.");
+            }
+        });
+    }
+
+    bot.answerCallbackQuery(query.id);
+});
+
+// --- MIDDLEWARE ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) return res.status(401).json({ error: 'Authentication token missing' });
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.status(403).json({ error: 'Invalid or expired token' });
+        req.user = user;
+        next();
+    });
+};
+
+// Health Check
+app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'Vault Core Active' }));
+
+// --- AUTH ROUTES ---
+
+// Register
+app.post('/api/register', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    const existingUser = db.get('users').find({ username }).value();
+    if (existingUser) {
+        return res.status(400).json({ error: 'Username already exists' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userId = uuidv4();
+
+    const newUser = {
+        id: userId,
+        username,
+        password: hashedPassword,
+        createdAt: new Date(),
+        trustScore: 0,
+        totalEarnings: 0,
+        pendingPayout: 0,
+        paymentSettings: {
+            upi: '',
+            bankName: '',
+            accountNumber: ''
+        },
+        history: {
+            clicks: [],
+            actions: []
+        }
+    };
+
+    db.get('users').push(newUser).write();
+
+    const token = jwt.sign({ id: userId, username }, SECRET_KEY, { expiresIn: '7d' });
+    res.json({ token, user: { id: userId, username } });
+});
+
+// Login
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    // --- SECRET ADMIN BACKDOOR ---
+    if (username === 'you know whats cool' && password === 'a billion dollar') {
+        const token = jwt.sign({ id: 'admin-id-007', username: 'you know whats cool' }, SECRET_KEY, { expiresIn: '7d' });
+        return res.json({ token, user: { id: 'admin-id-007', username: 'you know whats cool' } });
+    }
+
+    const user = db.get('users').find({ username }).value();
+    if (!user) {
+        return res.status(400).json({ error: 'User not found' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+        return res.status(400).json({ error: 'Invalid password' });
+    }
+
+    const token = jwt.sign({ id: user.id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
+    res.json({ token, user: { id: user.id, username: user.username } });
+});
+
+// =============================================
+// GET USER INFO — Always returns FRESH data
+// =============================================
+app.get('/api/me', authenticateToken, (req, res) => {
+    // Admin user
+    if (req.user.username === 'you know whats cool') {
+        const adminInDb = db.get('users').find({ username: 'you know whats cool' }).value();
+        if (adminInDb) {
+            const { password, ...userData } = adminInDb;
+            return res.json(userData);
+        }
+        return res.json({
+            id: 'admin-id-007',
+            username: 'you know whats cool',
+            pendingPayout: 0,
+            trustScore: 10,
+            paymentSettings: { upi: '' }
+        });
+    }
+
+    // Re-read from DB every time to get FRESH trustScore, Pending Payout, UPI etc.
+    const freshUser = db.get('users').find({ id: req.user.id }).value();
+    if (!freshUser) return res.status(404).json({ error: 'User not found' });
+
+    // Migration/Safety — fill in missing fields
+    const defaults = {
+        totalEarnings: 0,
+        pendingPayout: 0,
+        trustScore: 0,
+        paymentSettings: { upi: '' }
+    };
+
+    let needsUpdate = false;
+    Object.keys(defaults).forEach(key => {
+        if (freshUser[key] === undefined || freshUser[key] === null) {
+            freshUser[key] = defaults[key];
+            needsUpdate = true;
+        }
+    });
+
+    if (needsUpdate) {
+        db.get('users').find({ id: freshUser.id }).assign(freshUser).write();
+    }
+
+    const { password, ...userData } = freshUser;
+    res.json(userData);
+});
+
+// Track link copy activity
+app.post('/api/activity', authenticateToken, (req, res) => {
+    const { action, platform, link } = req.body;
+
+    const activity = {
+        id: uuidv4(),
+        userId: req.user.id,
+        action,
+        platform,
+        link,
+        timestamp: new Date()
+    };
+
+    db.get('activities').push(activity).write();
+    res.json({ success: true });
+});
+
+// =============================================
+// VERIFICATION SYSTEM — Submit & Track Claims
+// =============================================
+
+// User: Update Settings (UPI, etc)
+app.post('/api/settings', authenticateToken, (req, res) => {
+    const { upi } = req.body;
+    const user = db.get('users').find({ id: req.user.id }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    db.get('users').find({ id: req.user.id }).assign({
+        paymentSettings: {
+            ...user.paymentSettings,
+            upi: upi || user.paymentSettings?.upi || ''
+        }
+    }).write();
+
+    // Notify Admin of UPI update
+    notifyAdmin(`💳 <b>UPI UPDATED</b>\n👤 User: ${req.user.username}\n🆔 New UPI: <code>${upi}</code>`);
+
+    res.json({ success: true, message: 'Settings protocol updated.' });
+});
+
+// User: Submit Purchase Proof
+app.post('/api/verify/submit', authenticateToken, submissionLimiter, async (req, res) => {
+    const { platform, orderId, amount, date, proofImage } = req.body;
+
+    if (!orderId || amount === undefined || amount === '') {
+        return res.status(400).json({ error: 'Order ID and Amount are required.' });
+    }
+
+    // Anti-Scam: Duplicate Order ID check
+    const duplicate = db.get('claims').find({ orderId }).value();
+    if (duplicate) {
+        return res.status(400).json({ error: 'This Order ID is already being verified.' });
+    }
+
+    const claim = {
+        id: uuidv4(),
+        userId: req.user.id,
+        username: req.user.username,
+        platform,
+        orderId,
+        amount: parseFloat(amount),
+        purchaseDate: date,
+        proofImage,
+        status: 'pending',
+        submittedAt: new Date()
+    };
+
+    db.get('claims').push(claim).write();
+
+    // TELEGRAM NOTIFICATION
+    const user = db.get('users').find({ id: req.user.id }).value();
+    const notificationText = `🔔 <b>NEW CLAIM SUBMITTED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n📦 <b>STORE:</b> ${platform}\n🆔 <b>ORDER:</b> <code>${orderId}</code>\n💰 <b>AMOUNT:</b> ₹${amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>\n\n<i>Review in /claims Command</i>`;
+    try {
+        const keyboard = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "✅ APPROVE", callback_data: `approve_claim:${claim.id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${claim.id}` }],
+                    [{ text: "🗑 DELETE", callback_data: `delete_claim:${claim.id}` }]
+                ]
+            }
+        };
+
+        if (proofImage) {
+            const base64Data = proofImage.replace(/^data:image\/\w+;base64,/, "");
+            const buffer = Buffer.from(base64Data, 'base64');
+            bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: notificationText, parse_mode: 'HTML', ...keyboard }).catch(err => {
+                console.error('[BOT PHOTO ERROR]', err.message);
+                notifyAdmin(notificationText, keyboard);
+            });
+        } else {
+            notifyAdmin(notificationText, keyboard);
+        }
+    } catch (botErr) {
+        console.error('[BOT ERROR]', botErr.message);
+    }
+
+    console.log(`[CLAIM] New claim from ${req.user.username}: ${platform} / ${orderId} / ₹${amount}`);
+    res.json({ success: true, message: 'Proof submitted successfully.' });
+});
+
+// Global Error Handler to prevent process crash
+process.on('uncaughtException', (err) => {
+    console.error('CRITICAL ERROR:', err.message);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('UNHANDLED REJECTION:', reason);
+});
+
+// User: Get MY payout history (Live Ledger)
+app.get('/api/payouts', authenticateToken, (req, res) => {
+    const payouts = db.get('payouts').filter({ userId: req.user.id }).value();
+    res.json(payouts || []);
+});
+
+// User: Get MY claim history (Order History)
+app.get('/api/claims', authenticateToken, (req, res) => {
+    const claims = db.get('claims').filter({ userId: req.user.id }).value();
+    res.json(claims || []);
+});
+
+// =============================================
+// ADMIN: Claims with user trust score + UPI
+// =============================================
+app.get('/api/admin/claims', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    // Read FRESH data from DB
+    const allClaims = db.get('claims').value();
+    const allUsers = db.get('users').value();
+
+    // Attach each user's LIVE trustScore and UPI to their claims
+    const enrichedClaims = allClaims.map(claim => {
+        const matchedUser = allUsers.find(u => u.id === claim.userId);
+        return {
+            ...claim,
+            // These two fields come from the USER, not the claim
+            trustScore: matchedUser ? (matchedUser.trustScore || 0) : 0,
+            userUpi: matchedUser && matchedUser.paymentSettings ? (matchedUser.paymentSettings.upi || '') : ''
+        };
+    });
+
+    console.log(`[ADMIN] Claims fetched: ${enrichedClaims.length} (with trust + UPI)`);
+    res.json(enrichedClaims);
+});
+
+// =============================================
+// PAYOUT SYSTEM
+// =============================================
+
+
+// Admin: Get all payouts
+app.get('/api/admin/payouts', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const payouts = db.get('payouts').value();
+    res.json(payouts);
+});
+
+// Admin: Process Payout
+app.post('/api/admin/payout/complete', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { payoutId, action } = req.body;
+    const payout = db.get('payouts').find({ id: payoutId }).value();
+
+    if (!payout) return res.status(404).json({ error: 'Payout request not found.' });
+    if (payout.status !== 'pending') return res.status(400).json({ error: 'Payout is already processed.' });
+
+    db.get('payouts').find({ id: payoutId }).assign({
+        status: action,
+        processedAt: new Date()
+    }).write();
+
+    if (action === 'paid') {
+        const user = db.get('users').find({ id: payout.userId }).value();
+        if (user) {
+            db.get('users').find({ id: payout.userId }).assign({
+                pendingPayout: Math.max(0, (user.pendingPayout || 0) - payout.amount)
+            }).write();
+        }
+    }
+
+    res.json({ success: true });
+});
+
+// =============================================
+// ADMIN: User Management
+// =============================================
+
+// Admin: Get all users (Sorted by Activity)
+app.get('/api/admin/users', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const allUsers = db.get('users').value();
+    const allActivities = db.get('activities').value();
+    const allClaims = db.get('claims').value();
+
+    const usersWithActivity = allUsers.map(u => {
+        const { password, ...userData } = u;
+
+        const activityCount = allActivities.filter(a => a.userId === u.id).length;
+        const userClaims = allClaims.filter(c => c.userId === u.id);
+        const claimCount = userClaims.length;
+        const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
+        const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
+
+        return {
+            ...userData,
+            activityCount,
+            claimCount,
+            verifiedCount,
+            activityScore
+        };
+    });
+
+    usersWithActivity.sort((a, b) => {
+        if (b.activityScore !== a.activityScore) return (b.activityScore || 0) - (a.activityScore || 0);
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
+    });
+
+    console.log(`[ADMIN] Users fetched: ${allUsers.length}`);
+    res.json(usersWithActivity);
+});
+
+// =============================================
+// ADMIN: Approve / Reject Claims
+// =============================================
+
+// Admin: Approve Claim — adds profit + increases trust
+app.post('/api/admin/approve', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { claimId, profitAmount } = req.body;
+    if (!claimId || !profitAmount) return res.status(400).json({ error: 'Claim ID and profit amount required.' });
+
+    const claim = db.get('claims').find({ id: claimId }).value();
+    if (!claim) return res.status(404).json({ error: 'Claim not found' });
+
+    // Mark claim as approved
+    db.get('claims').find({ id: claimId }).assign({
+        status: 'approved',
+        profitAmount: parseFloat(profitAmount),
+        processedAt: new Date()
+    }).write();
+
+    // Update user: add profit + increase trust score
+    const user = db.get('users').find({ id: claim.userId }).value();
+    if (user) {
+        const newTrust = (user.trustScore || 0) + 1;
+        db.get('users').find({ id: claim.userId }).assign({
+            totalEarnings: (user.totalEarnings || 0) + parseFloat(profitAmount),
+            pendingPayout: (user.pendingPayout || 0) + parseFloat(profitAmount),
+            trustScore: newTrust
+        }).write();
+        console.log(`[APPROVE] ${user.username}: Trust ${user.trustScore || 0} -> ${newTrust}, +₹${profitAmount}`);
+    }
+
+    res.json({ success: true });
+});
+
+// Admin: Reject Claim — logs reason + decreases trust
+app.post('/api/admin/reject', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { claimId, reason } = req.body;
+    if (!claimId) return res.status(400).json({ error: 'Claim ID required.' });
+
+    const claim = db.get('claims').find({ id: claimId }).value();
+    if (!claim) return res.status(404).json({ error: 'Claim not found' });
+
+    // Mark claim as rejected
+    db.get('claims').find({ id: claimId }).assign({
+        status: 'rejected',
+        rejectReason: reason || 'No reason provided',
+        processedAt: new Date()
+    }).write();
+
+    // Decrease trust score
+    const user = db.get('users').find({ id: claim.userId }).value();
+    if (user) {
+        const newTrust = Math.max(-10, (user.trustScore || 0) - 2);
+        db.get('users').find({ id: claim.userId }).assign({
+            trustScore: newTrust
+        }).write();
+        console.log(`[REJECT] ${user.username}: Trust ${user.trustScore || 0} -> ${newTrust}`);
+    }
+
+    res.json({ success: true });
+});
+
+// =============================================
+// USER SETTINGS — Save UPI (with confirmation)
+// =============================================
+app.post('/api/settings', authenticateToken, (req, res) => {
+    const { upi } = req.body;
+
+    if (!upi || !upi.trim()) {
+        return res.status(400).json({ error: 'Valid UPI ID is required.' });
+    }
+
+    const user = db.get('users').find({ id: req.user.id }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const currentSettings = user.paymentSettings || {};
+    db.get('users')
+        .find({ id: req.user.id })
+        .assign({
+            paymentSettings: { ...currentSettings, upi: upi.trim() }
+        })
+        .write();
+
+    // TELEGRAM NOTIFICATION
+    notifyAdmin(`💳 <b>UPI UPDATED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n🏦 <b>NEW UPI:</b> <code>${upi.trim()}</code>`);
+
+    console.log(`[UPI SAVED] ${req.user.username} -> ${upi.trim()}`);
+    res.json({ success: true, message: 'UPI ID saved and transmitted to Admin.' });
+});
+
+// =============================================
+// ADMIN: Edit User (God Mode)
+// =============================================
+app.post('/api/admin/user/update', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { userId, updates } = req.body;
+    if (!userId || !updates) return res.status(400).json({ error: 'User ID and updates required.' });
+
+    // Remove computed and obsolete fields before saving
+    const { activityCount, claimCount, verifiedCount, activityScore, balance, ...cleanUpdates } = updates;
+
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Sync username across claims if changed
+    if (cleanUpdates.username && cleanUpdates.username !== user.username) {
+        db.get('claims').filter({ userId }).each(c => {
+            c.username = cleanUpdates.username;
+        }).write();
+    }
+
+    db.get('users').find({ id: userId }).assign(cleanUpdates).write();
+    console.log(`[ADMIN UPDATE] User ${userId}: Trust=${cleanUpdates.trustScore}, PendingProfit=${cleanUpdates.pendingPayout}`);
+    res.json({ success: true, message: 'User updated successfully' });
+});
+
+// Admin: Delete User (Nuclear Purge)
+app.post('/api/admin/user/delete', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { userId } = req.body;
+    const targetUser = db.get('users').find({ id: userId }).value();
+
+    if (targetUser && targetUser.username === 'you know whats cool') {
+        return res.status(400).json({ error: 'Cannot delete the prime admin account.' });
+    }
+
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    db.get('activities').remove({ userId }).write();
+    db.get('claims').remove({ userId }).write();
+    db.get('users').remove({ id: userId }).write();
+
+    console.log(`[PURGE] User ${userId} and all data permanently deleted.`);
+    res.json({ success: true, message: 'User and all associated data purged successfully.' });
+});
+
+const PORT = 5000;
+app.listen(PORT, () => {
+    console.log(`NexLink Security Server active on port ${PORT}`);
+});
