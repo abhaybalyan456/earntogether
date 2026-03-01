@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Link2, ShoppingCart, Landmark, TrendingUp, ShieldCheck, ShieldAlert, Copy, CheckCircle2, Zap, ExternalLink, LineChart, Sparkles, Shirt, Smartphone, Droplets, Plane, User, Users, LogOut, Key, History, AlertCircle, Crown, Shield, Hexagon, Wallet, CreditCard, Settings, ChevronRight, FileText, Check, X, Camera, Eye, Award, FileCheck, RotateCw, Clock, Send, Instagram, MessageCircle, Headphones } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import AdminPanel from './AdminPanel'
 import './index.css'
 
 const API_BASE = '/api';
@@ -101,8 +102,8 @@ const AuthModal = ({ isOpen, type, onClose, onAuthSuccess }) => {
   );
 };
 
-// --- ADMIN PANEL ---
-const AdminPanel = ({ onBack }) => {
+// --- ADMIN PANEL (moved to AdminPanel.jsx) ---
+const AdminPanelLegacy_REMOVED = ({ onBack }) => {
   const [claims, setClaims] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -755,7 +756,7 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
         </div>
       </div>
 
-      <div className="dash-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="dash-grid">
         <div className="balance-card">
           <TrendingUp size={32} color="var(--gold)" style={{ marginBottom: '1.5rem' }} />
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 800, textTransform: 'uppercase' }}>Lifetime Profit</div>
@@ -776,7 +777,7 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
             fetchPayouts(); // Updates payout history
           }}
           className="lux-btn-ghost pulse"
-          style={{ gridColumn: 'span 2', padding: '1rem', marginTop: '1rem', fontSize: '0.6rem', letterSpacing: '0.2em' }}
+          style={{ gridColumn: '1 / -1', padding: '1rem', marginTop: '1rem', fontSize: '0.6rem', letterSpacing: '0.2em' }}
         >
           FORCE DATA SYNC PROTOCOL
         </button>
@@ -1398,7 +1399,7 @@ function App() {
                     key={activeTab}
                     initial={{ opacity: 0, filter: 'blur(10px)' }} animate={{ opacity: 1, filter: 'blur(0px)' }}
                     transition={{ duration: 0.6 }}
-                    style={{ padding: '6rem' }}
+                    style={{ padding: 'clamp(1.5rem, 5vw, 6rem)' }}
                   >
                     <div className="lux-flex-stack" style={{ marginBottom: '4rem', textAlign: 'left', alignItems: 'flex-start' }}>
                       <div>

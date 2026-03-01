@@ -1086,6 +1086,190 @@ app.post('/api/admin/user/delete', authenticateToken, (req, res) => {
     res.json({ success: true, message: 'User and all associated data purged successfully.' });
 });
 
+// =============================================
+// ADMIN: Send Withdrawal (matches Telegram /send_withdraw)
+// =============================================
+app.post('/api/admin/user/send-withdraw', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const { userId, amount } = req.body;
+    if (!userId || !amount || isNaN(amount) || parseFloat(amount) <= 0) {
+        return res.status(400).json({ error: 'Valid user ID and positive amount required.' });
+    }
+
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const amountSent = parseFloat(amount);
+    const oldBalance = user.pendingPayout || 0;
+    const newBalance = Math.max(0, oldBalance - amountSent);
+    const now = new Date();
+
+    // Record Payout in ledger
+    const payoutRec = {
+        id: uuidv4(),
+        userId,
+        username: user.username,
+        amount: amountSent,
+        upi: user.paymentSettings?.upi || 'NONE',
+        status: 'paid',
+        requestedAt: now,
+        processedAt: now,
+        adminNote: 'APPROVED PAID (WEB ADMIN)'
+    };
+
+    db.get('payouts').push(payoutRec).write();
+    db.get('users').find({ id: userId }).assign({ pendingPayout: newBalance }).write();
+
+    console.log(`[ADMIN WITHDRAW] ${user.username}: Sent ₹${amountSent}, Remaining: ₹${newBalance}`);
+    res.json({ success: true, message: `₹${amountSent.toFixed(2)} sent to ${user.username}. Remaining: ₹${newBalance.toFixed(2)}` });
+});
+
+// =============================================
+// ADMIN: Purge User Claims (matches Telegram purge_claims)
+// =============================================
+app.post('/api/admin/user/purge-claims', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { userId } = req.body;
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const count = db.get('claims').filter({ userId }).value().length;
+    db.get('claims').remove({ userId }).write();
+    console.log(`[PURGE CLAIMS] ${user.username}: ${count} claims purged`);
+    res.json({ success: true, message: `${count} claims purged for ${user.username}` });
+});
+
+// =============================================
+// ADMIN: Purge User Payout History (matches Telegram purge_history)
+// =============================================
+app.post('/api/admin/user/purge-history', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { userId } = req.body;
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const count = db.get('payouts').filter({ userId }).value().length;
+    db.get('payouts').remove({ userId }).write();
+    console.log(`[PURGE HISTORY] ${user.username}: ${count} payout records purged`);
+    res.json({ success: true, message: `${count} withdrawal records purged for ${user.username}` });
+});
+
+// =============================================
+// ADMIN: Purge User Profit (matches Telegram purge_profit)
+// =============================================
+app.post('/api/admin/user/purge-profit', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { userId } = req.body;
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    db.get('users').find({ id: userId }).assign({ totalEarnings: 0 }).write();
+    console.log(`[PURGE PROFIT] ${user.username}: Lifetime profit reset to ₹0.00`);
+    res.json({ success: true, message: `Lifetime profit for ${user.username} reset to ₹0.00` });
+});
+
+// =============================================
+// ADMIN: Purge User Pending Payout (matches Telegram purge_pending)
+// =============================================
+app.post('/api/admin/user/purge-pending', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { userId } = req.body;
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    db.get('users').find({ id: userId }).assign({ pendingPayout: 0 }).write();
+    console.log(`[PURGE PENDING] ${user.username}: Pending payout reset to ₹0.00`);
+    res.json({ success: true, message: `Pending payout for ${user.username} reset to ₹0.00` });
+});
+
+// =============================================
+// ADMIN: Get Platform Stats (matches Telegram /stats)
+// =============================================
+app.get('/api/admin/stats', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+
+    const users = db.get('users').value();
+    const claims = db.get('claims').value();
+    const payouts = db.get('payouts').value();
+    const activities = db.get('activities').value();
+
+    const totalPending = users.reduce((sum, u) => sum + (u.pendingPayout || 0), 0);
+    const usersToPay = users.filter(u => (u.pendingPayout || 0) > 0).length;
+    const pendingClaims = claims.filter(c => c.status === 'pending').length;
+    const approvedClaims = claims.filter(c => c.status === 'approved').length;
+    const rejectedClaims = claims.filter(c => c.status === 'rejected').length;
+    const totalProfit = claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (c.profitAmount || 0), 0);
+    const totalPaid = payouts.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount || 0), 0);
+    const totalActivities = activities.length;
+
+    res.json({
+        totalUsers: users.length,
+        totalPending: totalPending.toFixed(2),
+        usersToPay,
+        pendingClaims,
+        approvedClaims,
+        rejectedClaims,
+        totalClaims: claims.length,
+        totalProfit: totalProfit.toFixed(2),
+        totalPaid: totalPaid.toFixed(2),
+        totalActivities,
+        totalPayouts: payouts.length
+    });
+});
+
+// =============================================
+// ADMIN: Delete Individual Claim (matches Telegram delete_claim)
+// =============================================
+app.post('/api/admin/claim/delete', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { claimId } = req.body;
+    if (!claimId) return res.status(400).json({ error: 'Claim ID required.' });
+    db.get('claims').remove({ id: claimId }).write();
+    console.log(`[DELETE CLAIM] Claim ${claimId} deleted`);
+    res.json({ success: true, message: 'Claim deleted successfully.' });
+});
+
+// =============================================
+// ADMIN: Purge All Claims (matches Telegram /purge_all_claims)
+// =============================================
+app.post('/api/admin/claims/purge-all', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const count = db.get('claims').value().length;
+    db.set('claims', []).write();
+    console.log(`[GLOBAL PURGE] All ${count} claims purged`);
+    res.json({ success: true, message: `Global purge completed: ${count} claims erased.` });
+});
+
+// =============================================
+// ADMIN: Reset User Password
+// =============================================
+app.post('/api/admin/user/reset-password', authenticateToken, async (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const { userId, newPassword } = req.body;
+    if (!userId || !newPassword || newPassword.length < 3) return res.status(400).json({ error: 'Valid user ID and password (min 3 chars) required.' });
+    const user = db.get('users').find({ id: userId }).value();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    db.get('users').find({ id: userId }).assign({ password: hashedPassword }).write();
+    console.log(`[PASSWORD RESET] ${user.username}: Password reset by admin`);
+    res.json({ success: true, message: `Password reset for ${user.username}` });
+});
+
+// =============================================
+// ADMIN: Get user claims (for user detail view)
+// =============================================
+app.get('/api/admin/user/:userId/claims', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const claims = db.get('claims').filter({ userId: req.params.userId }).value();
+    res.json(claims || []);
+});
+
+// =============================================
+// ADMIN: Get user payouts (for user detail view)
+// =============================================
+app.get('/api/admin/user/:userId/payouts', authenticateToken, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+    const payouts = db.get('payouts').filter({ userId: req.params.userId }).value();
+    res.json(payouts || []);
+});
+
 const PORT = process.env.PORT || 5000;
 // Final Catch-All: Serve index.html for any non-API routes (SPA support)
 app.use((req, res) => {
