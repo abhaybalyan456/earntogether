@@ -92,6 +92,42 @@
         "clicks": [],
         "actions": []
       }
+    },
+    {
+      "id": "27efd1fd-9ddd-47a1-a30f-45234061095f",
+      "username": "anotheruser",
+      "password": "$2b$10$UpsLjro83SoeCqrOSb85eukY3bBO9xENQ9bYFQj86/BvzdxsBnIUi",
+      "createdAt": "2026-03-01T11:05:25.548Z",
+      "trustScore": 0,
+      "totalEarnings": 0,
+      "pendingPayout": 0,
+      "paymentSettings": {
+        "upi": "",
+        "bankName": "",
+        "accountNumber": ""
+      },
+      "history": {
+        "clicks": [],
+        "actions": []
+      }
+    },
+    {
+      "id": "e702273f-e413-4d83-9e8a-fc7ecfcaa579",
+      "username": "finaltest",
+      "password": "$2b$10$emGR3BvYGQQJGK.3ls8PNuYIi0jp5WeWqOhSM/53QAuJrbkn5l4iy",
+      "createdAt": "2026-03-01T11:09:10.379Z",
+      "trustScore": 0,
+      "totalEarnings": 0,
+      "pendingPayout": 0,
+      "paymentSettings": {
+        "upi": "",
+        "bankName": "",
+        "accountNumber": ""
+      },
+      "history": {
+        "clicks": [],
+        "actions": []
+      }
     }
   ],
   "activities": [],
