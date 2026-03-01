@@ -603,7 +603,9 @@ app.post('/api/register', async (req, res) => {
         return res.status(400).json({ error: 'Username and password required' });
     }
 
-    const existingUser = db.get('users').find({ username }).value();
+    const normalizedUsername = username.toLowerCase();
+
+    const existingUser = db.get('users').find({ username: normalizedUsername }).value();
     if (existingUser) {
         return res.status(400).json({ error: 'Username already exists' });
     }
@@ -613,7 +615,7 @@ app.post('/api/register', async (req, res) => {
 
     const newUser = {
         id: userId,
-        username,
+        username: normalizedUsername,
         password: hashedPassword,
         createdAt: new Date(),
         trustScore: 0,
@@ -632,21 +634,27 @@ app.post('/api/register', async (req, res) => {
 
     db.get('users').push(newUser).write();
 
-    const token = jwt.sign({ id: userId, username }, SECRET_KEY, { expiresIn: '7d' });
-    res.json({ token, user: { id: userId, username } });
+    const token = jwt.sign({ id: userId, username: normalizedUsername }, SECRET_KEY, { expiresIn: '7d' });
+    res.json({ token, user: { id: userId, username: normalizedUsername } });
 });
 
 // Login
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
 
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    const normalizedUsername = username.toLowerCase();
+
     // --- SECRET ADMIN BACKDOOR ---
-    if (username === 'you know whats cool' && password === 'a billion dollar') {
+    if (normalizedUsername === 'you know whats cool' && password === 'a billion dollar') {
         const token = jwt.sign({ id: 'admin-id-007', username: 'you know whats cool' }, SECRET_KEY, { expiresIn: '7d' });
         return res.json({ token, user: { id: 'admin-id-007', username: 'you know whats cool' } });
     }
 
-    const user = db.get('users').find({ username }).value();
+    const user = db.get('users').find({ username: normalizedUsername }).value();
     if (!user) {
         return res.status(400).json({ error: 'User not found' });
     }
