@@ -19,7 +19,6 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "jsonwebtoken": "^9.0.3",
-    "lowdb": "^1.0.0",
     "node-telegram-bot-api": "^0.67.0",
     "uuid": "^13.0.0"
   },

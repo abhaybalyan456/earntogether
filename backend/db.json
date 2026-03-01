@@ -38,6 +38,60 @@
       "balance": 0,
       "pendingPayout": 350,
       "totalEarnings": 350
+    },
+    {
+      "id": "cb1237bd-87ef-4f53-b714-88dc74384a37",
+      "username": "abhay",
+      "password": "$2b$10$ldj9l6/MyAOB6hbqei9IKuSUl31IhFPgaHBo0LWaA1sl6WD8XR11S",
+      "createdAt": "2026-03-01T10:57:24.458Z",
+      "trustScore": 0,
+      "totalEarnings": 200,
+      "pendingPayout": 1000,
+      "paymentSettings": {
+        "upi": "",
+        "bankName": "",
+        "accountNumber": ""
+      },
+      "history": {
+        "clicks": [],
+        "actions": []
+      }
+    },
+    {
+      "id": "e762d5db-36d4-4af6-af14-8579ea7be009",
+      "username": "testuser",
+      "password": "$2b$10$yvUeCi5UddayuHew3W41Se/8xoKvIi1KYy86uoAjRab7Drnx04aJW",
+      "createdAt": "2026-03-01T10:59:13.396Z",
+      "trustScore": 0,
+      "totalEarnings": 0,
+      "pendingPayout": 0,
+      "paymentSettings": {
+        "upi": "",
+        "bankName": "",
+        "accountNumber": ""
+      },
+      "history": {
+        "clicks": [],
+        "actions": []
+      }
+    },
+    {
+      "id": "9774ef0e-2970-4fad-ad06-e811a426452e",
+      "username": "testuser2",
+      "password": "$2b$10$DlK0VnO74CwT5t5cKuXrMOUHDO9zt.axoqXzCUd4CxJBKxp1NRaii",
+      "createdAt": "2026-03-01T11:00:47.464Z",
+      "trustScore": 0,
+      "totalEarnings": 0,
+      "pendingPayout": 0,
+      "paymentSettings": {
+        "upi": "",
+        "bankName": "",
+        "accountNumber": ""
+      },
+      "history": {
+        "clicks": [],
+        "actions": []
+      }
     }
   ],
   "activities": [],
@@ -248,6 +302,28 @@
       "status": "paid",
       "requestedAt": "2026-02-27T16:04:36.337Z",
       "processedAt": "2026-02-27T16:04:36.337Z",
+      "adminNote": "APPROVED PAID"
+    },
+    {
+      "id": "a121790d-160a-4b3a-a13f-1f7d42c56118",
+      "userId": "cb1237bd-87ef-4f53-b714-88dc74384a37",
+      "username": "abhay",
+      "amount": 100,
+      "upi": "NONE",
+      "status": "paid",
+      "requestedAt": "2026-03-01T10:57:42.618Z",
+      "processedAt": "2026-03-01T10:57:42.618Z",
+      "adminNote": "APPROVED PAID"
+    },
+    {
+      "id": "ff3b29c3-0f37-4936-beb7-7cbfc1a49539",
+      "userId": "cb1237bd-87ef-4f53-b714-88dc74384a37",
+      "username": "abhay",
+      "amount": 100,
+      "upi": "NONE",
+      "status": "paid",
+      "requestedAt": "2026-03-01T10:58:12.774Z",
+      "processedAt": "2026-03-01T10:58:12.774Z",
       "adminNote": "APPROVED PAID"
     }
   ]
