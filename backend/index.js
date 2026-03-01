@@ -10,7 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const TelegramBot = require('node-telegram-bot-api');
 const rateLimit = require('express-rate-limit');
 
-const adapter = new FileSync('db.json');
+const adapter = new FileSync(path.join(__dirname, 'db.json'));
 const db = low(adapter);
 
 // Set defaults for the database
@@ -248,11 +248,11 @@ bot.onText(/\/claims/, (msg) => {
     });
 });
 
-// List Payouts Command
-bot.onText(/\/payouts/, (msg) => {
+// List Payout Ledger Command
+bot.onText(/\/payout_ledgers/, (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
     const pending = db.get('payouts').filter({ status: 'pending' }).value();
-    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending payouts.");
+    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending payout requests.");
 
     pending.forEach(p => {
         const text = `💸 <b>PAYOUT REQUEST</b>\n👤 <b>USER:</b> ${p.username}\n💰 <b>AMOUNT:</b> ₹${p.amount}\n🏦 <b>UPI:</b> <code>${p.upi}</code>`;
@@ -738,25 +738,6 @@ app.post('/api/activity', authenticateToken, (req, res) => {
 // VERIFICATION SYSTEM — Submit & Track Claims
 // =============================================
 
-// User: Update Settings (UPI, etc)
-app.post('/api/settings', authenticateToken, (req, res) => {
-    const { upi } = req.body;
-    const user = db.get('users').find({ id: req.user.id }).value();
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    db.get('users').find({ id: req.user.id }).assign({
-        paymentSettings: {
-            ...user.paymentSettings,
-            upi: upi || user.paymentSettings?.upi || ''
-        }
-    }).write();
-
-    // Notify Admin of UPI update
-    notifyAdmin(`💳 <b>UPI UPDATED</b>\n👤 User: ${req.user.username}\n🆔 New UPI: <code>${upi}</code>`);
-
-    res.json({ success: true, message: 'Settings protocol updated.' });
-});
-
 // User: Submit Purchase Proof
 app.post('/api/verify/submit', authenticateToken, submissionLimiter, async (req, res) => {
     const { platform, orderId, amount, date, proofImage } = req.body;
@@ -817,12 +798,17 @@ app.post('/api/verify/submit', authenticateToken, submissionLimiter, async (req,
     res.json({ success: true, message: 'Proof submitted successfully.' });
 });
 
-// Global Error Handler to prevent process crash
+// Global Error Handler to prevent process crash and return JSON
+app.use((err, req, res, next) => {
+    console.error('SYSTEM ERROR:', err.stack);
+    res.status(500).json({ error: 'Internal Vault Error: Request failed.' });
+});
+
 process.on('uncaughtException', (err) => {
-    console.error('CRITICAL ERROR:', err.message);
+    console.error('CRITICAL UNCAUGHT ERROR:', err.message);
 });
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('UNHANDLED REJECTION:', reason);
+    console.error('UNHANDLED REJECTION AT:', promise, 'reason:', reason);
 });
 
 // User: Get MY payout history (Live Ledger)

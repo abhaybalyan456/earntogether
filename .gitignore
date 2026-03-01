@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+db.json
+backend/db.json
+backend/last_backend_log.txt

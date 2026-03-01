@@ -642,16 +642,16 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
   const saveSettings = async (e) => {
     e.preventDefault();
     if (!upi || !upi.trim()) {
-      setNotification({ type: 'warn', message: 'Please enter a valid UPI ID before saving.' });
+      setNotification({ type: 'warn', message: 'Enter a valid UPI ID (e.g. name@bank) to link your account.' });
       return;
     }
     setSaving(true);
-    const success = await onUpdateSettings({ upi });
+    const result = await onUpdateSettings({ upi });
     setSaving(false);
-    if (success) {
+    if (result.success) {
       setNotification({ type: 'success', message: 'UPI LINKED SUCCESSFULLY — Your payment ID has been securely transmitted to the Admin. All future payouts will be sent to this UPI address.' });
     } else {
-      setNotification({ type: 'warn', message: 'Failed to update UPI. Please check your connection and try again.' });
+      setNotification({ type: 'warn', message: result.error || 'Failed to update UPI. Please check your connection and try again.' });
     }
     fetchHistory();
   };
@@ -1250,19 +1250,21 @@ function App() {
   // Save UPI settings — returns true/false for notification in UserDashboard
   const updateSettings = async (settings) => {
     const token = localStorage.getItem('nexlink_token');
-    if (!token) return false;
+    if (!token) return { success: false, error: 'Authorization lost. Please log in again.' };
     try {
       const res = await fetch(`${API_BASE}/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify(settings)
       });
+      const data = await res.json().catch(() => ({}));
       // ALWAYS refresh user data after saving settings
       await checkAuthStatus();
-      return res.ok;
+      if (res.ok) return { success: true };
+      return { success: false, error: data.error || 'Identity Sync Failed' };
     } catch (err) {
       console.error('Settings update failed', err);
-      return false;
+      return { success: false, error: 'Connection lost to the secure vault.' };
     }
   };
 
