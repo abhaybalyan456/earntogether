@@ -577,7 +577,7 @@ const mapUser = (u) => ({
     totalEarnings: parseFloat(u.total_earnings) || 0,
     pendingPayout: parseFloat(u.pending_payout) || 0,
     paymentSettings: { upi: u.upi || '' },
-    is_banned: !!u.is_banned,
+    isBanned: !!u.is_banned,
     createdAt: u.created_at
 });
 

@@ -804,7 +804,7 @@ function App() {
     } catch (err) {
       console.error("Identity sync unreachable", err);
     }
-  }, []);
+  }, [view]); // FIXED: Added view as dependency to prevent closure of old view state
 
   // Initial load
   useEffect(() => {
@@ -823,7 +823,7 @@ function App() {
     if ((view === 'dash' || view === 'admin') && user) {
       checkAuthStatus();
     }
-  }, [view, checkAuthStatus]);
+  }, [view, user, checkAuthStatus]); // Added user to dependencies for consistency
 
   // Save UPI settings — returns true/false for notification in UserDashboard
   const updateSettings = async (settings) => {
