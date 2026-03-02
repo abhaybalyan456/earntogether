@@ -24,4 +24,5 @@ dist-ssr
 *.sw?
 db.json
 backend/db.json
+backend/vault_db.json
 backend/last_backend_log.txt
