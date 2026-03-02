@@ -10,7 +10,7 @@ const SECRET_KEY = process.env.SECRET_KEY || 'nexlink-secret-key-pulse-vault';
  */
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // 5 attempts per IP
+    max: 10, // 10 attempts per IP
     message: { error: 'Too many login attempts. Please try again after 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false

