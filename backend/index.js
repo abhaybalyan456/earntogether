@@ -17,8 +17,7 @@ const {
     submissionLimiter,
     sanitizeMiddleware,
     authenticateSession,
-    setSecureCookie,
-    nosqlSanitize
+    setSecureCookie
 } = require('./middleware/security');
 
 const SECRET_KEY = 'nexlink-secret-key-pulse-vault'; // Use environment variable in production
@@ -26,7 +25,6 @@ const SECRET_KEY = 'nexlink-secret-key-pulse-vault'; // Use environment variable
 // --- SECURITY: GLOBAL MIDDLEWARE ---
 app.use(securityHeaders); // Security Headers (Helmet, HSTS, CSP, X-Frame)
 app.use(cookieParser()); // Cookie handling for HTTP-only sessions
-app.use(nosqlSanitize); // Protect against NoSQL injection
 app.use(sanitizeMiddleware); // Protect against XSS/HTML injections globally
 
 
