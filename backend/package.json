@@ -19,23 +19,15 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^8.2.1",
     "express-session": "^1.19.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "lowdb": "^1.0.0",
-    "mongoose": "^9.2.3",
     "node-telegram-bot-api": "^0.67.0",
     "uuid": "^13.0.0",
     "xss-clean": "^0.1.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
-  },
-  "nodemonConfig": {
-    "ignore": [
-      "db.json"
-    ]
   }
 }
