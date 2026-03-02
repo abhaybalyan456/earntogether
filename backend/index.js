@@ -239,6 +239,7 @@ bot.on('callback_query', async (query) => {
 
     try {
         const db = readDB();
+
         if (action === 'edit_earnings') {
             bot.sendMessage(ADMIN_CHAT_ID, "📈 <b>Enter Lifetime Profit (₹):</b>", { parse_mode: 'HTML' });
             const handler = async (msg) => {
@@ -294,6 +295,45 @@ bot.on('callback_query', async (query) => {
             bot.on('message', handler);
         }
 
+        if (action === 'edit_pending') {
+            const user = db.users.find(u => u.id === id);
+            if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
+            bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>EDIT PENDING BALANCE: ${user.username}</b>\n\nCurrent: ₹${(parseFloat(user.pending_payout) || 0).toFixed(2)}\n\n<b>Enter New Balance (₹):</b>`, { parse_mode: 'HTML' });
+            const handler = async (msg) => {
+                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+                const newVal = parseFloat(msg.text);
+                if (isNaN(newVal)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+                const uIdx = db.users.findIndex(u => u.id === id);
+                if (uIdx !== -1) {
+                    db.users[uIdx].pending_payout = newVal;
+                    writeDB(db);
+                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Balance Updated:</b> ${db.users[uIdx].username} now has ₹${newVal.toFixed(2)} pending.`);
+                }
+                bot.removeListener('message', handler);
+            };
+            bot.on('message', handler);
+        }
+
+        if (action === 'edit_upi') {
+            const user = db.users.find(u => u.id === id);
+            if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
+            bot.sendMessage(ADMIN_CHAT_ID, `💳 <b>EDIT UPI: ${user.username}</b>\n\nCurrent: <code>${user.upi || 'NONE'}</code>\n\n<b>Enter New UPI ID:</b>`, { parse_mode: 'HTML' });
+            const handler = async (msg) => {
+                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
+                const newUpi = msg.text.trim();
+                const uIdx = db.users.findIndex(u => u.id === id);
+                if (uIdx !== -1) {
+                    db.users[uIdx].upi = newUpi;
+                    writeDB(db);
+                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>UPI Updated:</b> ${db.users[uIdx].username} now uses <code>${newUpi}</code>`);
+                }
+                bot.removeListener('message', handler);
+            };
+            bot.on('message', handler);
+        }
+
         if (action === 'send_withdraw') {
             const user = db.users.find(u => u.id === id);
             if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
@@ -318,7 +358,7 @@ bot.on('callback_query', async (query) => {
                         status: 'paid',
                         requested_at: now,
                         processed_at: now,
-                        admin_note: 'APPROVED PAID'
+                        admin_note: 'APPROVED PAID VIA BOT'
                     });
                     writeDB(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n👤 User: <b>${db.users[uIdx].username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}`);
@@ -374,6 +414,55 @@ bot.on('callback_query', async (query) => {
                 bot.removeListener('message', handler);
             };
             bot.on('message', handler);
+        }
+
+        if (action === 'purge_claims') {
+            const uIdx = db.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                db.claims = db.claims.filter(c => c.user_id !== id);
+                writeDB(db);
+                bot.sendMessage(ADMIN_CHAT_ID, `💥 <b>PURGE SUCCESS:</b> All claims for ${db.users[uIdx].username} deleted.`);
+            }
+        }
+
+        if (action === 'purge_history') {
+            const uIdx = db.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                db.payouts = db.payouts.filter(p => p.user_id !== id);
+                writeDB(db);
+                bot.sendMessage(ADMIN_CHAT_ID, `📜 <b>PURGE SUCCESS:</b> Withdrawal history for ${db.users[uIdx].username} deleted.`);
+            }
+        }
+
+        if (action === 'purge_profit') {
+            const uIdx = db.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                db.users[uIdx].total_earnings = 0;
+                writeDB(db);
+                bot.sendMessage(ADMIN_CHAT_ID, `💹 <b>PURGE SUCCESS:</b> Lifetime profit reset for ${db.users[uIdx].username}.`);
+            }
+        }
+
+        if (action === 'purge_pending') {
+            const uIdx = db.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                db.users[uIdx].pending_payout = 0;
+                writeDB(db);
+                bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>PURGE SUCCESS:</b> Pending withdrawal reset for ${db.users[uIdx].username}.`);
+            }
+        }
+
+        if (action === 'delete_user') {
+            const uIdx = db.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                const name = db.users[uIdx].username;
+                db.users.splice(uIdx, 1);
+                db.claims = db.claims.filter(c => c.user_id !== id);
+                db.payouts = db.payouts.filter(p => p.user_id !== id);
+                db.activities = db.activities.filter(a => a.user_id !== id);
+                writeDB(db);
+                bot.sendMessage(ADMIN_CHAT_ID, `☢️ <b>ACCOUNT DESTROYED:</b> <b>${name}</b> and all their data has been erased.`);
+            }
         }
 
         bot.answerCallbackQuery(query.id);
@@ -463,20 +552,256 @@ app.get('/api/payouts', authenticateSession, (req, res) => {
     res.json(db.payouts.filter(p => p.user_id === req.user._id).map(p => ({ ...p, _id: p.id })));
 });
 
+app.post('/api/settings', authenticateSession, (req, res) => {
+    const { upi } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === req.user._id);
+    if (uIdx === -1) return res.status(404).json({ error: 'User not found' });
+    const oldUpi = db.users[uIdx].upi || 'NONE';
+    db.users[uIdx].upi = upi;
+    writeDB(db);
+    notifyAdmin(`💳 <b>UPI UPDATED:</b>\n👤 User: <b>${req.user.username}</b>\n🔄 Old: <code>${oldUpi}</code>\n✅ New: <code>${upi}</code>`);
+    res.json({ success: true });
+});
+
+app.post('/api/activity', authenticateSession, (req, res) => {
+    const { action, platform, link } = req.body;
+    const db = readDB();
+    db.activities.push({ id: uuid.v4(), user_id: req.user._id, username: req.user.username, action, platform, link, created_at: new Date().toISOString() });
+    writeDB(db);
+    res.json({ success: true });
+});
+
 // Admin Panel APIs
 app.get('/api/admin/stats', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const db = readDB();
-    res.json({ totalUsers: db.users.length, totalClaims: db.claims.length });
+    const totalPending = db.users.reduce((sum, u) => sum + (parseFloat(u.pending_payout) || 0), 0);
+    const usersToPay = db.users.filter(u => (parseFloat(u.pending_payout) || 0) > 0).length;
+    const pendingClaims = db.claims.filter(c => c.status === 'pending').length;
+    const approvedClaims = db.claims.filter(c => c.status === 'approved').length;
+    const rejectedClaims = db.claims.filter(c => c.status === 'rejected').length;
+    const totalProfit = db.claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (parseFloat(c.profit_amount) || 0), 0);
+    const totalPaid = db.payouts.filter(p => p.status === 'paid').reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+
+    res.json({
+        totalUsers: db.users.length,
+        totalClaims: db.claims.length,
+        totalPending: totalPending.toFixed(2),
+        usersToPay,
+        pendingClaims,
+        approvedClaims,
+        rejectedClaims,
+        totalProfit: totalProfit.toFixed(2),
+        totalPaid: totalPaid.toFixed(2),
+        totalActivities: db.activities.length
+    });
 });
 
 app.get('/api/admin/users', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const db = readDB();
-    res.json(db.users.map(mapUser));
+    res.json(db.users.map(u => ({
+        ...mapUser(u),
+        activityCount: db.activities.filter(a => a.user_id === u.id).length,
+        claimCount: db.claims.filter(c => c.user_id === u.id).length,
+        verifiedCount: db.claims.filter(c => c.user_id === u.id && c.status === 'approved').length,
+        activityScore: db.activities.filter(a => a.user_id === u.id).length + (db.claims.filter(c => c.user_id === u.id).length * 10)
+    })));
 });
 
 app.get('/api/admin/claims', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const db = readDB();
-    res.json(db.claims.map(c => ({ ...c, _id: c.id })));
+    res.json(db.claims.map(c => {
+        const user = db.users.find(u => u.id === c.user_id);
+        return { ...c, _id: c.id, trustScore: user?.trust_score || 0, userUpi: user?.upi || '' };
+    }).reverse());
+});
+
+app.post('/api/admin/approve', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { claimId, profitAmount } = req.body;
+    const db = readDB();
+    const cIdx = db.claims.findIndex(c => c.id === claimId);
+    if (cIdx === -1) return res.status(404).json({ error: 'Claim not found' });
+
+    db.claims[cIdx].status = 'approved';
+    db.claims[cIdx].profit_amount = parseFloat(profitAmount);
+    db.claims[cIdx].processed_at = new Date().toISOString();
+
+    const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
+    if (uIdx !== -1) {
+        db.users[uIdx].total_earnings = (parseFloat(db.users[uIdx].total_earnings) || 0) + parseFloat(profitAmount);
+        db.users[uIdx].pending_payout = (parseFloat(db.users[uIdx].pending_payout) || 0) + parseFloat(profitAmount);
+        db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) + 1;
+    }
+    writeDB(db);
+    res.json({ success: true });
+});
+
+app.post('/api/admin/reject', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { claimId, reason } = req.body;
+    const db = readDB();
+    const cIdx = db.claims.findIndex(c => c.id === claimId);
+    if (cIdx === -1) return res.status(404).json({ error: 'Claim not found' });
+
+    db.claims[cIdx].status = 'rejected';
+    db.claims[cIdx].reject_reason = reason;
+    db.claims[cIdx].processed_at = new Date().toISOString();
+
+    const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
+    if (uIdx !== -1) {
+        db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) - 2;
+    }
+    writeDB(db);
+    res.json({ success: true });
+});
+
+app.post('/api/admin/claim/delete', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { claimId } = req.body;
+    const db = readDB();
+    db.claims = db.claims.filter(c => c.id !== claimId);
+    writeDB(db);
+    res.json({ success: true });
+});
+
+app.post('/api/admin/claims/purge-all', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const db = readDB();
+    db.claims = [];
+    writeDB(db);
+    res.json({ message: 'All claims purged' });
+});
+
+app.post('/api/admin/user/update', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId, updates } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx === -1) return res.status(404).json({ error: 'User not found' });
+
+    // Manual map to avoid overwriting password/id
+    if (updates.username) db.users[uIdx].username = updates.username;
+    if (updates.trustScore !== undefined) db.users[uIdx].trust_score = updates.trustScore;
+    if (updates.pendingPayout !== undefined) db.users[uIdx].pending_payout = updates.pendingPayout;
+    if (updates.totalEarnings !== undefined) db.users[uIdx].total_earnings = updates.totalEarnings;
+    if (updates.paymentSettings?.upi) db.users[uIdx].upi = updates.paymentSettings.upi;
+
+    writeDB(db);
+    res.json({ success: true });
+});
+
+app.post('/api/admin/user/delete', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.body;
+    const db = readDB();
+    db.users = db.users.filter(u => u.id !== userId);
+    db.claims = db.claims.filter(c => c.user_id !== userId);
+    db.payouts = db.payouts.filter(p => p.user_id !== userId);
+    db.activities = db.activities.filter(a => a.user_id !== userId);
+    writeDB(db);
+    res.json({ message: 'User deleted permanently' });
+});
+
+app.post('/api/admin/user/send-withdraw', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId, amount } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx === -1) return res.status(404).json({ error: 'User not found' });
+
+    const amountVal = parseFloat(amount);
+    const oldBalance = parseFloat(db.users[uIdx].pending_payout) || 0;
+    db.users[uIdx].pending_payout = Math.max(0, oldBalance - amountVal);
+
+    const now = new Date().toISOString();
+    db.payouts.push({
+        id: uuid.v4(),
+        user_id: userId,
+        username: db.users[uIdx].username,
+        amount: amountVal,
+        upi: db.users[uIdx].upi || 'NONE',
+        status: 'paid',
+        requested_at: now,
+        processed_at: now,
+        admin_note: 'PAID VIA ADMIN PANEL'
+    });
+
+    writeDB(db);
+    res.json({ message: `Successfully paid ₹${amountVal}` });
+});
+
+app.post('/api/admin/user/purge-claims', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.body;
+    const db = readDB();
+    db.claims = db.claims.filter(c => c.user_id !== userId);
+    writeDB(db);
+    res.json({ message: 'Claims purged' });
+});
+
+app.post('/api/admin/user/purge-history', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.body;
+    const db = readDB();
+    db.payouts = db.payouts.filter(p => p.user_id !== userId);
+    writeDB(db);
+    res.json({ message: 'History purged' });
+});
+
+app.post('/api/admin/user/purge-profit', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx !== -1) db.users[uIdx].total_earnings = 0;
+    writeDB(db);
+    res.json({ message: 'Profit reset' });
+});
+
+app.post('/api/admin/user/purge-pending', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx !== -1) db.users[uIdx].pending_payout = 0;
+    writeDB(db);
+    res.json({ message: 'Pending balance reset' });
+});
+
+app.post('/api/admin/user/reset-password', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId, newPassword } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx === -1) return res.status(404).json({ error: 'User not found' });
+
+    bcrypt.hash(newPassword, 10).then(hash => {
+        const freshDb = readDB(); // Re-read to prevent race condition during async hash
+        const freshIdx = freshDb.users.findIndex(u => u.id === userId);
+        if (freshIdx !== -1) {
+            freshDb.users[freshIdx].password = hash;
+            writeDB(freshDb);
+        }
+    });
+    res.json({ message: 'Password reset scheduled' });
+});
+
+app.get('/api/admin/user/:userId/claims', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.params;
+    const db = readDB();
+    res.json(db.claims.filter(c => c.user_id === userId).map(c => ({ ...c, _id: c.id })));
+});
+
+app.get('/api/admin/user/:userId/payouts', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId } = req.params;
+    const db = readDB();
+    res.json(db.payouts.filter(p => p.user_id === userId).map(p => ({ ...p, _id: p.id })));
 });
 
 const PORT = process.env.PORT || 5000;
