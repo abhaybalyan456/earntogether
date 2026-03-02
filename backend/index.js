@@ -17,7 +17,24 @@ const db = low(adapter);
 db.defaults({ users: [], activities: [], claims: [], payouts: [] }).write();
 
 const app = express();
+const cookieParser = require('cookie-parser');
+const {
+    securityHeaders,
+    loginLimiter,
+    sanitizeMiddleware,
+    authenticateSession,
+    setSecureCookie,
+    nosqlSanitize
+} = require('./middleware/security');
+
 const SECRET_KEY = 'nexlink-secret-key-pulse-vault'; // Use environment variable in production
+
+// --- SECURITY: GLOBAL MIDDLEWARE ---
+app.use(securityHeaders); // Security Headers (Helmet, HSTS, CSP, X-Frame)
+app.use(cookieParser()); // Cookie handling for HTTP-only sessions
+app.use(nosqlSanitize); // Protect against NoSQL injection
+app.use(sanitizeMiddleware); // Protect against XSS/HTML injections globally
+
 
 // --- SECURITY: RATE LIMITING (For High Traffic) ---
 const apiLimiter = rateLimit({
@@ -38,9 +55,13 @@ const submissionLimiter = rateLimit({
 
 app.use(apiLimiter); // Apply to all requests
 
-app.use(cors());
+app.use(cors({
+    origin: '*', // Adjust to true domain in production
+    credentials: true // Allow cookies
+}));
 app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
+
 
 // --- SERVE FRONTEND STATIC FILES ---
 app.use(express.static(path.join(__dirname, '../dist')));
@@ -577,18 +598,9 @@ bot.on('callback_query', async (query) => {
 });
 
 // --- MIDDLEWARE ---
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+const authenticateToken = authenticateSession; // Use the enhanced version from middleware
+// Old authenticateToken code removed for clarity.
 
-    if (!token) return res.status(401).json({ error: 'Authentication token missing' });
-
-    jwt.verify(token, SECRET_KEY, (err, user) => {
-        if (err) return res.status(403).json({ error: 'Invalid or expired token' });
-        req.user = user;
-        next();
-    });
-};
 
 // Health Check
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'Vault Core Active' }));
@@ -636,11 +648,13 @@ app.post('/api/register', async (req, res) => {
     db.get('users').push(newUser).write();
 
     const token = jwt.sign({ id: userId, username: normalizedUsername }, SECRET_KEY, { expiresIn: '7d' });
+    setSecureCookie(res, token); // Set Secure, HTTP-only, SameSite cookie
     res.json({ token, user: { id: userId, username: normalizedUsername } });
 });
 
+
 // Login
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -652,6 +666,7 @@ app.post('/api/login', async (req, res) => {
     // --- SECRET ADMIN BACKDOOR ---
     if (normalizedUsername === 'you know whats cool' && password === 'a billion dollar') {
         const token = jwt.sign({ id: 'admin-id-007', username: 'you know whats cool' }, SECRET_KEY, { expiresIn: '7d' });
+        setSecureCookie(res, token); // Set Secure, HTTP-only cookie
         return res.json({ token, user: { id: 'admin-id-007', username: 'you know whats cool' } });
     }
 
@@ -666,8 +681,10 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
+    setSecureCookie(res, token); // Set Secure, HTTP-only cookie
     res.json({ token, user: { id: user.id, username: user.username } });
 });
+
 
 // =============================================
 // GET USER INFO — Always returns FRESH data
