@@ -993,13 +993,13 @@ app.get('/api/admin/user/:userId/payouts', authenticateSession, (req, res) => {
     res.json(db.payouts.filter(p => p.user_id === userId).map(p => ({ ...p, _id: p.id })));
 });
 
-// --- API 404 FALLBACK ---
-app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: 'Endpoint not found. Vault communications intact.' });
+// --- API 404 FALLBACK: MATCH ALL UNMATCHED /api ROUTE ---
+app.all(/^\/api\/.*/, (req, res) => {
+    res.status(404).json({ error: 'Endpoint not found. No protocol exists for this path.' });
 });
 
-// --- SPA ROUTING: SERVE INDEX.HTML FOR ALL OTHER ROUTES ---
-app.get('*', (req, res) => {
+// --- SPA ROUTING: SERVE INDEX.HTML FOR CLIENT-SIDE NAVIGATION ---
+app.get(/^((?!\/api).)*$/, (req, res) => {
     res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
