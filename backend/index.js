@@ -78,7 +78,14 @@ const notifyAdmin = async (message, options = {}) => {
 // COMMAND: /start
 bot.onText(/\/start/, (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const menu = `🛡 <b>GROW TOGETHER ADMIN v10.0</b> 🛡\n\nDatabase: <b>TELEGRAM-SYNC VAULT</b>\n\n<b>Commands:</b>\n/claims - Review pending orders\n/payouts - Review money requests\n/users - List top performers\n/stats - System health & profit\n/search [name] - Find user data\n/database - 📥 DOWNLOAD FULL VAULT`;
+
+    // STARTUP CHECK: If DB reset by Render, alert Admin
+    const db = readDB();
+    if (db.users.length === 0) {
+        bot.sendMessage(ADMIN_CHAT_ID, "⚠️ <b>RESTORE REQUIRED:</b> Your database appears empty (Render reset file system). Please upload your latest <code>vault_db.json</code> backup to restore all data instantly.", { parse_mode: 'HTML' });
+    }
+
+    const menu = `🛡 <b>GROW TOGETHER ADMIN v11.0</b> 🛡\n\nDatabase: <b>TELEGRAM-SYNC VAULT</b>\n\n<b>Commands:</b>\n/claims - Review pending orders\n/payouts - Review money requests\n/users - List top performers\n/stats - System health & profit\n/search [name] - Find user data\n/database - 📥 DOWNLOAD FULL VAULT\n/maintenance - 🛠 Toggle Site Lock\n/broadcast [msg] - 📣 Global Alert`;
     bot.sendMessage(ADMIN_CHAT_ID, menu, { parse_mode: 'HTML' });
 });
 
@@ -135,27 +142,40 @@ bot.onText(/\/maintenance/, (msg) => {
     bot.sendMessage(ADMIN_CHAT_ID, `🛠 <b>Maintenance Mode:</b> ${db.meta.maintenance_mode ? '🔴 ENABLED (Site Locked)' : '🟢 DISABLED (Site Live)'}`);
 });
 
-// RESTORE DATABASE FROM TELEGRAM UPLOAD
-bot.on('document', async (msg) => {
+// COMMAND: /claims (Condensed Detailed View)
+bot.onText(/\/claims/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    if (msg.document.file_name === 'vault_db.json') {
-        bot.sendMessage(ADMIN_CHAT_ID, "⏳ <b>Syncing Vault from Upload...</b>", { parse_mode: 'HTML' });
-        try {
-            const fileLink = await bot.getFileLink(msg.document.file_id);
-            const response = await fetch(fileLink);
-            const newData = await response.json();
+    try {
+        const db = readDB();
+        const pending = db.claims.filter(c => c.status === 'pending');
 
-            // Validate basic structure
-            if (newData.users && newData.claims) {
-                const fs = require('fs');
-                fs.writeFileSync(DB_PATH, JSON.stringify(newData, null, 4));
-                bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>RESTORATION SUCCESSFUL:</b> The website is now perfectly synced with your uploaded backup.");
-            } else {
-                bot.sendMessage(ADMIN_CHAT_ID, "⚠️ <b>Invalid Backup:</b> This file does not match the Vault schema.");
-            }
-        } catch (err) {
-            bot.sendMessage(ADMIN_CHAT_ID, "❌ <b>Restoration Failed:</b> " + err.message);
-        }
+        if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>No pending reviews.</b> Everything is cleared!");
+
+        bot.sendMessage(ADMIN_CHAT_ID, `📂 <b>PENDING REVIEWS (${pending.length}):</b> Processing...`);
+
+        pending.forEach(c => {
+            const text = `📦 <b>ORDER ID:</b> <code>${c.order_id}</code>\n` +
+                `👤 <b>User:</b> ${c.username}\n` +
+                `🏢 <b>Platform:</b> ${c.platform.toUpperCase()}\n` +
+                `💰 <b>Amount:</b> ₹${c.amount}\n` +
+                `📅 <b>Date:</b> ${c.purchase_date}\n` +
+                `🕒 <b>Submitted:</b> ${new Date(c.submitted_at).toLocaleString()}`;
+
+            bot.sendMessage(ADMIN_CHAT_ID, text, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: "✅ APPROVE", callback_data: `approve_claim:${c.id}` },
+                            { text: "❌ REJECT", callback_data: `reject_claim:${c.id}` }
+                        ],
+                        [{ text: "🗑 DELETE", callback_data: `delete_claim:${c.id}` }]
+                    ]
+                }
+            });
+        });
+    } catch (err) {
+        console.error(err);
     }
 });
 bot.onText(/\/payouts/, async (msg) => {
@@ -248,7 +268,7 @@ bot.onText(/\/search (.+)/, async (msg, match) => {
     const searchTerm = match[1].toLowerCase().trim();
     try {
         const db = readDB();
-        const user = db.users.find(u => u.username.toLowerCase() === searchTerm);
+        const user = db.users.find(u => u.username.toLowerCase().includes(searchTerm));
         if (!user) return notifyAdmin(`❌ User <b>${searchTerm}</b> not found.`);
 
         const claims = db.claims.filter(c => c.user_id === user.id);
@@ -307,10 +327,11 @@ bot.on('callback_query', async (query) => {
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
                 const newEarn = parseFloat(msg.text);
                 if (isNaN(newEarn)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const uIdx = db.users.findIndex(u => u.id === id);
+                const freshDb = readDB();
+                const uIdx = freshDb.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
-                    db.users[uIdx].total_earnings = newEarn;
-                    writeDB_Synced(db);
+                    freshDb.users[uIdx].total_earnings = newEarn;
+                    writeDB_Synced(freshDb);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Profit Updated:</b> Cumulative total is now ₹${newEarn.toFixed(2)}`);
                 }
                 bot.removeListener('message', handler);
@@ -325,10 +346,11 @@ bot.on('callback_query', async (query) => {
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
                 const newKarma = parseInt(msg.text);
                 if (isNaN(newKarma)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid score.");
-                const uIdx = db.users.findIndex(u => u.id === id);
+                const freshDb = readDB();
+                const uIdx = freshDb.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
-                    db.users[uIdx].trust_score = newKarma;
-                    writeDB_Synced(db);
+                    freshDb.users[uIdx].trust_score = newKarma;
+                    writeDB_Synced(freshDb);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Karma Updated:</b> New score is ${newKarma}`);
                 }
                 bot.removeListener('message', handler);
@@ -337,17 +359,18 @@ bot.on('callback_query', async (query) => {
         }
 
         if (action === 'rename_user') {
-            bot.sendMessage(ADMIN_CHAT_ID, "👤 <b>Enter New VAULT IDENTITY:</b>", { parse_mode: 'HTML' });
+            bot.sendMessage(ADMIN_CHAT_ID, "👤 <b>Enter New VAULT IDENTITY (will be normalized):</b>", { parse_mode: 'HTML' });
             const handler = async (msg) => {
                 if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newName = msg.text.trim();
-                const uIdx = db.users.findIndex(u => u.id === id);
+                const newName = msg.text.trim().toLowerCase();
+                const freshDb = readDB();
+                const uIdx = freshDb.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
-                    db.users[uIdx].username = newName;
-                    db.claims.forEach(c => { if (c.user_id === id) c.username = newName; });
-                    db.payouts.forEach(p => { if (p.user_id === id) p.username = newName; });
-                    writeDB_Synced(db);
+                    freshDb.users[uIdx].username = newName;
+                    freshDb.claims.forEach(c => { if (c.user_id === id) c.username = newName; });
+                    freshDb.payouts.forEach(p => { if (p.user_id === id) p.username = newName; });
+                    writeDB_Synced(freshDb);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>IDENTITY SYNCED:</b> Account is now <b>${newName}</b>`);
                 }
                 bot.removeListener('message', handler);
@@ -364,11 +387,12 @@ bot.on('callback_query', async (query) => {
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
                 const newVal = parseFloat(msg.text);
                 if (isNaN(newVal)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const uIdx = db.users.findIndex(u => u.id === id);
+                const freshDb = readDB();
+                const uIdx = freshDb.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
-                    db.users[uIdx].pending_payout = newVal;
-                    writeDB_Synced(db);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Balance Updated:</b> ${db.users[uIdx].username} now has ₹${newVal.toFixed(2)} pending.`);
+                    freshDb.users[uIdx].pending_payout = newVal;
+                    writeDB_Synced(freshDb);
+                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Balance Updated:</b> ${freshDb.users[uIdx].username} now has ₹${newVal.toFixed(2)} pending.`);
                 }
                 bot.removeListener('message', handler);
             };
@@ -403,25 +427,27 @@ bot.on('callback_query', async (query) => {
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
                 const amountSent = parseFloat(msg.text);
                 if (isNaN(amountSent) || amountSent <= 0) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const uIdx = db.users.findIndex(u => u.id === id);
+
+                const freshDb = readDB();
+                const uIdx = freshDb.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
-                    const oldBalance = parseFloat(db.users[uIdx].pending_payout) || 0;
+                    const oldBalance = parseFloat(freshDb.users[uIdx].pending_payout) || 0;
                     const newBalance = Math.max(0, oldBalance - amountSent);
-                    db.users[uIdx].pending_payout = newBalance;
+                    freshDb.users[uIdx].pending_payout = newBalance;
                     const now = new Date().toISOString();
-                    db.payouts.push({
+                    freshDb.payouts.push({
                         id: uuid.v4(),
                         user_id: id,
-                        username: db.users[uIdx].username,
+                        username: freshDb.users[uIdx].username,
                         amount: amountSent,
-                        upi: db.users[uIdx].upi || 'NONE',
+                        upi: freshDb.users[uIdx].upi || 'NONE',
                         status: 'paid',
                         requested_at: now,
                         processed_at: now,
                         admin_note: 'APPROVED PAID VIA BOT'
                     });
-                    writeDB_Synced(db);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n👤 User: <b>${db.users[uIdx].username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}`);
+                    writeDB_Synced(freshDb);
+                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n👤 User: <b>${freshDb.users[uIdx].username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}`);
                 }
                 bot.removeListener('message', handler);
             };
@@ -435,18 +461,20 @@ bot.on('callback_query', async (query) => {
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
                 const profit = parseFloat(msg.text);
                 if (isNaN(profit)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const cIdx = db.claims.findIndex(c => c.id === id);
-                if (cIdx !== -1 && db.claims[cIdx].status === 'pending') {
-                    db.claims[cIdx].status = 'approved';
-                    db.claims[cIdx].profit_amount = profit;
-                    db.claims[cIdx].processed_at = new Date().toISOString();
-                    const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
+
+                const freshDb = readDB();
+                const cIdx = freshDb.claims.findIndex(c => c.id === id);
+                if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
+                    freshDb.claims[cIdx].status = 'approved';
+                    freshDb.claims[cIdx].profit_amount = profit;
+                    freshDb.claims[cIdx].processed_at = new Date().toISOString();
+                    const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
                     if (uIdx !== -1) {
-                        db.users[uIdx].total_earnings = (parseFloat(db.users[uIdx].total_earnings) || 0) + profit;
-                        db.users[uIdx].pending_payout = (parseFloat(db.users[uIdx].pending_payout) || 0) + profit;
-                        db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) + 1;
-                        writeDB_Synced(db);
-                        bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>APPROVED:</b> ₹${profit} added to ${db.users[uIdx].username}'s pending withdrawal.`);
+                        freshDb.users[uIdx].total_earnings = (parseFloat(freshDb.users[uIdx].total_earnings) || 0) + profit;
+                        freshDb.users[uIdx].pending_payout = (parseFloat(freshDb.users[uIdx].pending_payout) || 0) + profit;
+                        freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) + 1;
+                        writeDB_Synced(freshDb);
+                        bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>APPROVED:</b> ₹${profit} added to ${freshDb.users[uIdx].username}'s pending withdrawal.`);
                     }
                 }
                 bot.removeListener('message', handler);
@@ -459,16 +487,18 @@ bot.on('callback_query', async (query) => {
             const handler = async (msg) => {
                 if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
                 if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const cIdx = db.claims.findIndex(c => c.id === id);
-                if (cIdx !== -1 && db.claims[cIdx].status === 'pending') {
-                    db.claims[cIdx].status = 'rejected';
-                    db.claims[cIdx].reject_reason = msg.text;
-                    db.claims[cIdx].processed_at = new Date().toISOString();
-                    const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
+
+                const freshDb = readDB();
+                const cIdx = freshDb.claims.findIndex(c => c.id === id);
+                if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
+                    freshDb.claims[cIdx].status = 'rejected';
+                    freshDb.claims[cIdx].reject_reason = msg.text;
+                    freshDb.claims[cIdx].processed_at = new Date().toISOString();
+                    const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
                     if (uIdx !== -1) {
-                        db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) - 2;
-                        writeDB_Synced(db);
-                        bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>REJECTED:</b> Notified ${db.users[uIdx].username}`);
+                        freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) - 2;
+                        writeDB_Synced(freshDb);
+                        bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>REJECTED:</b> Notified ${freshDb.users[uIdx].username}`);
                     }
                 }
                 bot.removeListener('message', handler);
@@ -525,9 +555,36 @@ bot.on('callback_query', async (query) => {
             }
         }
 
+        if (action === 'delete_claim') {
+            const cIdx = db.claims.findIndex(c => c.id === id);
+            if (cIdx !== -1) {
+                db.claims.splice(cIdx, 1);
+                writeDB_Synced(db);
+                bot.sendMessage(ADMIN_CHAT_ID, "🗑 Claim deleted permanently.");
+            }
+        }
+
         bot.answerCallbackQuery(query.id);
     } catch (err) {
         console.error(err);
+    }
+});
+
+// RESTORE LOGIC (Re-defined for document handling)
+bot.on('document', async (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    if (msg.document.file_name === 'vault_db.json') {
+        bot.sendMessage(ADMIN_CHAT_ID, "⏳ <b>Syncing Vault from Upload...</b>", { parse_mode: 'HTML' });
+        try {
+            const fileLink = await bot.getFileLink(msg.document.file_id);
+            const response = await fetch(fileLink);
+            const newData = await response.json();
+            if (newData.users && newData.claims) {
+                const fs = require('fs');
+                fs.writeFileSync(DB_PATH, JSON.stringify(newData, null, 4));
+                bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>RESTORE SUCCESS!</b> Website synced.");
+            }
+        } catch (err) { }
     }
 });
 
@@ -544,9 +601,17 @@ const mapUser = (u) => ({
 
 // --- API ROUTES ---
 app.post('/api/register', async (req, res) => {
-    const { username, password } = req.body;
+    let { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Data required' });
+
+    username = username.trim().toLowerCase();
+    const adminUser = 'you know whats cool';
+
+    if (username === adminUser) return res.status(403).json({ error: 'Protocol violation: Name Reserved' });
+
     const db = readDB();
-    if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) return res.status(400).json({ error: 'Username exists' });
+    if (db.users.find(u => u.username.toLowerCase() === username)) return res.status(400).json({ error: 'Username exists' });
+
     const newUser = { id: uuid.v4(), username, password: await bcrypt.hash(password, 10), trust_score: 0, total_earnings: 0, pending_payout: 0, created_at: new Date().toISOString() };
     db.users.push(newUser);
     writeDB_Synced(db);
@@ -555,7 +620,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 app.post('/api/login', loginLimiter, async (req, res) => {
-    const { username, password } = req.body;
+    let { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
 
     const normalizedUsername = username.toLowerCase().trim();
@@ -566,7 +631,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     if (normalizedUsername === adminUser && password === adminPass) {
         const token = jwt.sign({ _id: '00000000-0000-0000-0000-000000000007', username: adminUser }, SECRET_KEY, { expiresIn: '7d' });
         setSecureCookie(res, token);
-        return res.json({ token, user: { _id: '00000000-0000-0000-0000-000000000007', username: adminUser } });
+        return res.json({ token, user: { _id: '00000000-0000-0000-0000-000000000007', username: adminUser, isAdmin: true } });
     }
 
     const db = readDB();
@@ -606,7 +671,13 @@ app.post('/api/verify/submit', authenticateSession, (req, res) => {
     const claim = { id: uuid.v4(), user_id: req.user._id, username: req.user.username, platform, order_id: orderId, amount: parseFloat(amount), purchase_date: date, proof_image: proofImage, status: 'pending', submitted_at: new Date().toISOString() };
     db.claims.push(claim);
     writeDB_Synced(db);
-    notifyAdmin(`🔔 New Claim: ${req.user.username} - ₹${amount}`);
+    notifyAdmin(`🔔 <b>NEW CLAIM REGISTERED:</b>\n\n` +
+        `👤 <b>User:</b> ${req.user.username}\n` +
+        `🏢 <b>Platform:</b> ${platform.toUpperCase()}\n` +
+        `📦 <b>Order ID:</b> <code>${orderId}</code>\n` +
+        `💰 <b>Profit Value:</b> ₹${amount}\n` +
+        `📅 <b>Purchase Date:</b> ${date}\n\n` +
+        `<i>Use /claims to approve/reject now!</i>`);
     res.json({ success: true });
 });
 

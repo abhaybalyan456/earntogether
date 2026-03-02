@@ -794,6 +794,8 @@ function App() {
         const userData = await response.json();
         setUser(userData);
         if (userData.meta?.maintenance_mode && !userData.isAdmin) setView('maintenance');
+        // Auto-pivot to Dashboard if we just found an active session on the home screen
+        if (view === 'home') setView('dash');
       } else {
         // Token invalid/expired — clear it
         localStorage.removeItem('nexlink_token');
@@ -1121,8 +1123,10 @@ function App() {
               </button>
             </div>
           </motion.div>
-        ) : (
+        ) : view === 'admin' && user?.isAdmin ? (
           <AdminPanel onBack={() => setView('dash')} />
+        ) : (
+          null // Fallback for invalid states
         )}
       </AnimatePresence>
 
