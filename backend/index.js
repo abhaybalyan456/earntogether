@@ -569,7 +569,7 @@ bot.on('document', async (msg) => {
     }
 });
 
-// --- API MAPPER ---
+// --- DATA NORMALIZERS ---
 const mapUser = (u) => ({
     _id: u.id,
     username: u.username,
@@ -579,6 +579,22 @@ const mapUser = (u) => ({
     paymentSettings: { upi: u.upi || '' },
     isBanned: !!u.is_banned,
     createdAt: u.created_at
+});
+
+const mapClaim = (c) => ({
+    _id: c.id,
+    user_id: c.user_id,
+    username: c.username,
+    platform: c.platform,
+    orderId: c.orderId || c.order_id,
+    amount: parseFloat(c.amount) || 0,
+    purchaseDate: c.purchaseDate || c.purchase_date,
+    proofImage: c.proofImage || c.proof_image,
+    status: c.status,
+    submittedAt: c.submittedAt || c.submitted_at,
+    profitAmount: parseFloat(c.profitAmount || c.profit_amount) || 0,
+    processedAt: c.processedAt || c.processed_at,
+    rejectReason: c.rejectReason || c.reject_reason
 });
 
 // --- GLOBAL ROLE & STATUS MIDDLEWARE ---
@@ -677,7 +693,18 @@ app.get('/api/me', authenticateSession, (req, res) => {
 app.post('/api/verify/submit', authenticateSession, checkUserStatus, (req, res) => {
     const { platform, orderId, amount, date, proofImage } = req.body;
     const db = readDB();
-    const claim = { id: uuid.v4(), user_id: req.user._id, username: req.user.username, platform, order_id: orderId, amount: parseFloat(amount), purchase_date: date, proof_image: proofImage, status: 'pending', submitted_at: new Date().toISOString() };
+    const claim = {
+        id: uuid.v4(),
+        user_id: req.user._id,
+        username: req.user.username,
+        platform,
+        orderId,
+        amount: parseFloat(amount),
+        purchaseDate: date,
+        proofImage,
+        status: 'pending',
+        submittedAt: new Date().toISOString()
+    };
     db.claims.push(claim);
     writeDB_Synced(db);
     notifyAdmin(`🔔 <b>NEW CLAIM REGISTERED:</b>\n\n` +
@@ -692,7 +719,7 @@ app.post('/api/verify/submit', authenticateSession, checkUserStatus, (req, res) 
 
 app.get('/api/claims', authenticateSession, checkUserStatus, (req, res) => {
     const db = readDB();
-    res.json(db.claims.filter(c => c.user_id === req.user._id).map(c => ({ ...c, _id: c.id })));
+    res.json(db.claims.filter(c => c.user_id === req.user._id).map(mapClaim));
 });
 
 app.get('/api/payouts', authenticateSession, checkUserStatus, (req, res) => {
@@ -754,7 +781,7 @@ app.get('/api/admin/stats', authenticateSession, adminOnly, (req, res) => {
     const pendingClaims = db.claims.filter(c => c.status === 'pending').length;
     const approvedClaims = db.claims.filter(c => c.status === 'approved').length;
     const rejectedClaims = db.claims.filter(c => c.status === 'rejected').length;
-    const totalProfit = db.claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (parseFloat(c.profit_amount) || 0), 0);
+    const totalProfit = db.claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (parseFloat(c.profitAmount || c.profit_amount) || 0), 0);
     const totalPaid = db.payouts.filter(p => p.status === 'paid').reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
 
     res.json({
@@ -788,7 +815,8 @@ app.get('/api/admin/claims', authenticateSession, adminOnly, (req, res) => {
     const db = readDB();
     res.json(db.claims.map(c => {
         const user = db.users.find(u => u.id === c.user_id);
-        return { ...c, _id: c.id, trustScore: user?.trust_score || 0, userUpi: user?.upi || '' };
+        const mapped = mapClaim(c);
+        return { ...mapped, trustScore: user?.trust_score || 0, userUpi: user?.upi || '' };
     }).reverse());
 });
 
@@ -799,8 +827,8 @@ app.post('/api/admin/approve', authenticateSession, adminOnly, (req, res) => {
     if (cIdx === -1) return res.status(404).json({ error: 'Claim not found' });
 
     db.claims[cIdx].status = 'approved';
-    db.claims[cIdx].profit_amount = parseFloat(profitAmount);
-    db.claims[cIdx].processed_at = new Date().toISOString();
+    db.claims[cIdx].profitAmount = parseFloat(profitAmount);
+    db.claims[cIdx].processedAt = new Date().toISOString();
 
     const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
     if (uIdx !== -1) {
@@ -819,8 +847,8 @@ app.post('/api/admin/reject', authenticateSession, adminOnly, (req, res) => {
     if (cIdx === -1) return res.status(404).json({ error: 'Claim not found' });
 
     db.claims[cIdx].status = 'rejected';
-    db.claims[cIdx].reject_reason = reason;
-    db.claims[cIdx].processed_at = new Date().toISOString();
+    db.claims[cIdx].rejectReason = reason;
+    db.claims[cIdx].processedAt = new Date().toISOString();
 
     const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
     if (uIdx !== -1) {
