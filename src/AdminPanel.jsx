@@ -157,6 +157,40 @@ const AdminPanel = ({ onBack }) => {
     const filteredUsers = users.filter(u => u.username?.toLowerCase().includes(searchQuery.toLowerCase()));
     const pendingClaimsCount = claims.filter(c => c.status === 'pending').length;
 
+    const [broadcastMsg, setBroadcastMsg] = useState('');
+    const [maintenance, setMaintenance] = useState(false);
+
+    useEffect(() => {
+        if (stats) setMaintenance(stats.maintenanceMode);
+    }, [stats]);
+
+    const handleBroadcast = async () => {
+        if (!broadcastMsg) return;
+        const res = await fetch(`${API_BASE}/admin/broadcast`, {
+            method: 'POST', headers, body: JSON.stringify({ message: broadcastMsg })
+        });
+        if (res.ok) { showNotif('Global announcement updated'); setBroadcastMsg(''); }
+    };
+
+    const toggleMaintenance = async () => {
+        const res = await fetch(`${API_BASE}/admin/maintenance`, {
+            method: 'POST', headers, body: JSON.stringify({ enabled: !maintenance })
+        });
+        if (res.ok) {
+            const d = await res.json();
+            setMaintenance(d.enabled);
+            showNotif(`Maintenance mode ${d.enabled ? 'ENABLED' : 'DISABLED'}`);
+        }
+    };
+
+    const handleBanUser = async (userId, banned) => {
+        if (!window.confirm(`Are you sure you want to ${banned ? 'BAN' : 'UNBAN'} this user?`)) return;
+        const res = await fetch(`${API_BASE}/admin/user/ban`, {
+            method: 'POST', headers, body: JSON.stringify({ userId, banned })
+        });
+        if (res.ok) { fetchData(); showNotif(`User ${banned ? 'banned' : 'unbanned'}`); }
+    };
+
     const actionLabels = {
         'send-withdraw': { title: 'Send Withdrawal', placeholder: 'Amount (₹)', icon: <Send size={16} /> },
         'purge-claims': { title: 'Purge All Claims', confirm: true, icon: <Trash2 size={16} /> },
@@ -182,13 +216,28 @@ const AdminPanel = ({ onBack }) => {
             { label: 'TOTAL CLAIMS', value: stats.totalClaims, color: 'var(--gold)' },
         ];
         return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1rem' }}>
-                {cards.map((c, i) => (
-                    <div key={i} className="admin-stat-card">
-                        <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>{c.label}</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 900, color: c.color }}>{c.value}</div>
+            <div>
+                <div style={{ marginBottom: '2.5rem', padding: '1.5rem', border: '1px solid var(--glass-border)', borderRadius: '1rem', background: 'rgba(255,255,255,0.02)' }}>
+                    <h4 style={{ fontSize: '0.8rem', color: 'var(--gold)', marginBottom: '1rem' }}>VAULT GLOBAL CONTROLS</h4>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <button onClick={toggleMaintenance} className={`admin-action-btn ${maintenance ? 'danger' : 'success'}`} style={{ padding: '0.8rem 1.5rem' }}>
+                            <Shield size={14} /> {maintenance ? 'DISABLE MAINTENANCE' : 'ENABLE MAINTENANCE'}
+                        </button>
+                        <div style={{ display: 'flex', flex: 1, gap: '0.5rem', minWidth: '300px' }}>
+                            <input className="lux-input" placeholder="Broadcast Announcement to all users..." value={broadcastMsg} onChange={e => setBroadcastMsg(e.target.value)} />
+                            <button onClick={handleBroadcast} className="lux-btn-gold" style={{ padding: '0 1.5rem', fontSize: '0.7rem' }}>BROADCAST</button>
+                        </div>
                     </div>
-                ))}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1rem' }}>
+                    {cards.map((c, i) => (
+                        <div key={i} className="admin-stat-card">
+                            <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>{c.label}</div>
+                            <div style={{ fontSize: '1.4rem', fontWeight: 900, color: c.color }}>{c.value}</div>
+                        </div>
+                    ))}
+                </div>
             </div>
         );
     };
@@ -197,16 +246,21 @@ const AdminPanel = ({ onBack }) => {
     const renderUsers = () => (
         <div>
             <div style={{ marginBottom: '1.5rem' }}>
-                <input className="admin-search-input" placeholder="Search users..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <input className="admin-search-input" placeholder="Search users by name..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {filteredUsers.map(u => (
-                    <div key={u._id} className="admin-user-card">
+                    <div key={u._id} className="admin-user-card" style={{ opacity: u.isBanned ? 0.5 : 1, borderLeft: u.isBanned ? '4px solid var(--ruby)' : '' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.8rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minWidth: 0 }}>
-                                <div style={{ padding: '0.4rem', background: 'rgba(255,255,255,0.03)', borderRadius: '50%', flexShrink: 0 }}><User size={16} color="var(--gold)" /></div>
+                                <div style={{ padding: '0.4rem', background: 'rgba(255,255,255,0.03)', borderRadius: '50%', flexShrink: 0 }}>
+                                    {u.isBanned ? <AlertCircle size={16} color="var(--ruby)" /> : <User size={16} color="var(--gold)" />}
+                                </div>
                                 <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontWeight: 800, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.username}</div>
+                                    <div style={{ fontWeight: 800, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        {u.username}
+                                        {u.isBanned && <span style={{ fontSize: '0.5rem', color: 'var(--ruby)', fontWeight: 900 }}>BANNED</span>}
+                                    </div>
                                     <div style={{ fontSize: '0.55rem', opacity: 0.4 }}>Joined: {new Date(u.createdAt).toLocaleDateString()}</div>
                                 </div>
                             </div>
@@ -229,12 +283,12 @@ const AdminPanel = ({ onBack }) => {
                         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                             <button className="admin-action-btn" onClick={() => manageUser(u)}>✏️ Edit</button>
                             <button className="admin-action-btn success" onClick={() => setActionModal({ action: 'send-withdraw', userId: u._id, username: u.username })}>💸 Send Pay</button>
+                            <button className={`admin-action-btn ${u.isBanned ? 'success' : 'danger'}`} onClick={() => handleBanUser(u._id, !u.isBanned)}>
+                                {u.isBanned ? '🛡 Unban' : '🚫 Ban'}
+                            </button>
                             <button className="admin-action-btn" onClick={() => setActionModal({ action: 'reset-password', userId: u._id, username: u.username })}>🔑 Password</button>
                             <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-claims', userId: u._id, username: u.username })}>🗑 Claims</button>
                             <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-history', userId: u._id, username: u.username })}>📜 History</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-profit', userId: u._id, username: u.username })}>💹 Profit</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-pending', userId: u._id, username: u.username })}>💸 Pending</button>
-                            <button className="admin-action-btn danger" onClick={() => handleDeleteUser(u._id)}>☢️ Delete</button>
                             <button className="admin-action-btn" onClick={() => loadUserDetail(u._id)}>
                                 {expandedUser === u._id ? <ChevronUp size={12} /> : <ChevronDown size={12} />} Detail
                             </button>

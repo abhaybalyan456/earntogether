@@ -47,6 +47,25 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // --- TELEGRAM BOT LOGIC ---
 
+// Helper: Mirror Database to Telegram Cloud
+const mirrorToTelegram = async () => {
+    try {
+        await bot.sendDocument(ADMIN_CHAT_ID, DB_PATH, {
+            caption: `💾 <b>AUTOMATIC CLOUD MIRROR</b>\n🕒 ${new Date().toLocaleString()}\n\n<i>This is your live backup. If Render resets, upload this file here to restore everything.</i>`,
+            parse_mode: 'HTML'
+        });
+    } catch (err) {
+        console.error('[SYNC ERROR]', err.message);
+    }
+};
+
+// Global Sync Wrapper
+const writeDB_Synced = (data) => {
+    const success = writeDB(data);
+    if (success) mirrorToTelegram();
+    return success;
+};
+
 // Helper: Send formatted message to Admin
 const notifyAdmin = async (message, options = {}) => {
     try {
@@ -86,7 +105,7 @@ bot.onText(/\/purge_all_claims/, async (msg) => {
             try {
                 const db = readDB();
                 db.claims = [];
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, "💥 <b>GLOBAL PURGE SUCCESSFUL:</b> All claims have been erased from history.");
             } catch (err) {
                 bot.sendMessage(ADMIN_CHAT_ID, "❌ Purge failed: " + err.message);
@@ -97,7 +116,48 @@ bot.onText(/\/purge_all_claims/, async (msg) => {
     });
 });
 
-// COMMAND: /payouts
+// COMMAND: /broadcast [msg]
+bot.onText(/\/broadcast (.+)/, (msg, match) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const text = match[1];
+    const db = readDB();
+    db.meta.announcement = text;
+    writeDB_Synced(db);
+    bot.sendMessage(ADMIN_CHAT_ID, `📣 <b>Global Announcement Set:</b>\n\n"${text}"\n\nThis will now show on all user dashboards.`);
+});
+
+// COMMAND: /maintenance
+bot.onText(/\/maintenance/, (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    const db = readDB();
+    db.meta.maintenance_mode = !db.meta.maintenance_mode;
+    writeDB_Synced(db);
+    bot.sendMessage(ADMIN_CHAT_ID, `🛠 <b>Maintenance Mode:</b> ${db.meta.maintenance_mode ? '🔴 ENABLED (Site Locked)' : '🟢 DISABLED (Site Live)'}`);
+});
+
+// RESTORE DATABASE FROM TELEGRAM UPLOAD
+bot.on('document', async (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    if (msg.document.file_name === 'vault_db.json') {
+        bot.sendMessage(ADMIN_CHAT_ID, "⏳ <b>Syncing Vault from Upload...</b>", { parse_mode: 'HTML' });
+        try {
+            const fileLink = await bot.getFileLink(msg.document.file_id);
+            const response = await fetch(fileLink);
+            const newData = await response.json();
+
+            // Validate basic structure
+            if (newData.users && newData.claims) {
+                const fs = require('fs');
+                fs.writeFileSync(DB_PATH, JSON.stringify(newData, null, 4));
+                bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>RESTORATION SUCCESSFUL:</b> The website is now perfectly synced with your uploaded backup.");
+            } else {
+                bot.sendMessage(ADMIN_CHAT_ID, "⚠️ <b>Invalid Backup:</b> This file does not match the Vault schema.");
+            }
+        } catch (err) {
+            bot.sendMessage(ADMIN_CHAT_ID, "❌ <b>Restoration Failed:</b> " + err.message);
+        }
+    }
+});
 bot.onText(/\/payouts/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
     try {
@@ -250,7 +310,7 @@ bot.on('callback_query', async (query) => {
                 const uIdx = db.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
                     db.users[uIdx].total_earnings = newEarn;
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Profit Updated:</b> Cumulative total is now ₹${newEarn.toFixed(2)}`);
                 }
                 bot.removeListener('message', handler);
@@ -268,7 +328,7 @@ bot.on('callback_query', async (query) => {
                 const uIdx = db.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
                     db.users[uIdx].trust_score = newKarma;
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Karma Updated:</b> New score is ${newKarma}`);
                 }
                 bot.removeListener('message', handler);
@@ -287,7 +347,7 @@ bot.on('callback_query', async (query) => {
                     db.users[uIdx].username = newName;
                     db.claims.forEach(c => { if (c.user_id === id) c.username = newName; });
                     db.payouts.forEach(p => { if (p.user_id === id) p.username = newName; });
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>IDENTITY SYNCED:</b> Account is now <b>${newName}</b>`);
                 }
                 bot.removeListener('message', handler);
@@ -307,7 +367,7 @@ bot.on('callback_query', async (query) => {
                 const uIdx = db.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
                     db.users[uIdx].pending_payout = newVal;
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Balance Updated:</b> ${db.users[uIdx].username} now has ₹${newVal.toFixed(2)} pending.`);
                 }
                 bot.removeListener('message', handler);
@@ -326,7 +386,7 @@ bot.on('callback_query', async (query) => {
                 const uIdx = db.users.findIndex(u => u.id === id);
                 if (uIdx !== -1) {
                     db.users[uIdx].upi = newUpi;
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>UPI Updated:</b> ${db.users[uIdx].username} now uses <code>${newUpi}</code>`);
                 }
                 bot.removeListener('message', handler);
@@ -360,7 +420,7 @@ bot.on('callback_query', async (query) => {
                         processed_at: now,
                         admin_note: 'APPROVED PAID VIA BOT'
                     });
-                    writeDB(db);
+                    writeDB_Synced(db);
                     bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n👤 User: <b>${db.users[uIdx].username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}`);
                 }
                 bot.removeListener('message', handler);
@@ -385,7 +445,7 @@ bot.on('callback_query', async (query) => {
                         db.users[uIdx].total_earnings = (parseFloat(db.users[uIdx].total_earnings) || 0) + profit;
                         db.users[uIdx].pending_payout = (parseFloat(db.users[uIdx].pending_payout) || 0) + profit;
                         db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) + 1;
-                        writeDB(db);
+                        writeDB_Synced(db);
                         bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>APPROVED:</b> ₹${profit} added to ${db.users[uIdx].username}'s pending withdrawal.`);
                     }
                 }
@@ -407,7 +467,7 @@ bot.on('callback_query', async (query) => {
                     const uIdx = db.users.findIndex(u => u.id === db.claims[cIdx].user_id);
                     if (uIdx !== -1) {
                         db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) - 2;
-                        writeDB(db);
+                        writeDB_Synced(db);
                         bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>REJECTED:</b> Notified ${db.users[uIdx].username}`);
                     }
                 }
@@ -420,7 +480,7 @@ bot.on('callback_query', async (query) => {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.claims = db.claims.filter(c => c.user_id !== id);
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, `💥 <b>PURGE SUCCESS:</b> All claims for ${db.users[uIdx].username} deleted.`);
             }
         }
@@ -429,7 +489,7 @@ bot.on('callback_query', async (query) => {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.payouts = db.payouts.filter(p => p.user_id !== id);
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, `📜 <b>PURGE SUCCESS:</b> Withdrawal history for ${db.users[uIdx].username} deleted.`);
             }
         }
@@ -438,7 +498,7 @@ bot.on('callback_query', async (query) => {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.users[uIdx].total_earnings = 0;
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, `💹 <b>PURGE SUCCESS:</b> Lifetime profit reset for ${db.users[uIdx].username}.`);
             }
         }
@@ -447,7 +507,7 @@ bot.on('callback_query', async (query) => {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.users[uIdx].pending_payout = 0;
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>PURGE SUCCESS:</b> Pending withdrawal reset for ${db.users[uIdx].username}.`);
             }
         }
@@ -460,7 +520,7 @@ bot.on('callback_query', async (query) => {
                 db.claims = db.claims.filter(c => c.user_id !== id);
                 db.payouts = db.payouts.filter(p => p.user_id !== id);
                 db.activities = db.activities.filter(a => a.user_id !== id);
-                writeDB(db);
+                writeDB_Synced(db);
                 bot.sendMessage(ADMIN_CHAT_ID, `☢️ <b>ACCOUNT DESTROYED:</b> <b>${name}</b> and all their data has been erased.`);
             }
         }
@@ -489,7 +549,7 @@ app.post('/api/register', async (req, res) => {
     if (db.users.find(u => u.username.toLowerCase() === username.toLowerCase())) return res.status(400).json({ error: 'Username exists' });
     const newUser = { id: uuid.v4(), username, password: await bcrypt.hash(password, 10), trust_score: 0, total_earnings: 0, pending_payout: 0, created_at: new Date().toISOString() };
     db.users.push(newUser);
-    writeDB(db);
+    writeDB_Synced(db);
     const token = jwt.sign({ _id: newUser.id, username }, SECRET_KEY);
     res.json({ token, user: mapUser(newUser) });
 });
@@ -510,8 +570,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     }
 
     const db = readDB();
+    if (db.meta.maintenance_mode) return res.status(503).json({ error: 'Vault is currently under maintenance. Please try again later.' });
+
     const user = db.users.find(u => u.username.toLowerCase() === normalizedUsername);
     if (!user || !(await bcrypt.compare(password, user.password))) return res.status(400).json({ error: 'Invalid credentials' });
+    if (user.is_banned) return res.status(403).json({ error: 'Account Banned: Access denied by protocol.' });
 
     const token = jwt.sign({ _id: user.id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
     setSecureCookie(res, token);
@@ -519,17 +582,22 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 });
 
 app.get('/api/me', authenticateSession, (req, res) => {
+    const db = readDB();
     if (req.user.username === 'you know whats cool') {
         return res.json({
             _id: '00000000-0000-0000-0000-000000000007',
             username: 'you know whats cool',
             trustScore: 10,
-            pendingPayout: 0
+            pendingPayout: 0,
+            isAdmin: true,
+            meta: db.meta
         });
     }
-    const db = readDB();
     const user = db.users.find(u => u.id === req.user._id);
-    res.json(mapUser(user));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.is_banned) return res.status(403).json({ error: 'Banned' });
+
+    res.json({ ...mapUser(user), meta: db.meta });
 });
 
 app.post('/api/verify/submit', authenticateSession, (req, res) => {
@@ -537,7 +605,7 @@ app.post('/api/verify/submit', authenticateSession, (req, res) => {
     const db = readDB();
     const claim = { id: uuid.v4(), user_id: req.user._id, username: req.user.username, platform, order_id: orderId, amount: parseFloat(amount), purchase_date: date, proof_image: proofImage, status: 'pending', submitted_at: new Date().toISOString() };
     db.claims.push(claim);
-    writeDB(db);
+    writeDB_Synced(db);
     notifyAdmin(`🔔 New Claim: ${req.user.username} - ₹${amount}`);
     res.json({ success: true });
 });
@@ -559,7 +627,7 @@ app.post('/api/settings', authenticateSession, (req, res) => {
     if (uIdx === -1) return res.status(404).json({ error: 'User not found' });
     const oldUpi = db.users[uIdx].upi || 'NONE';
     db.users[uIdx].upi = upi;
-    writeDB(db);
+    writeDB_Synced(db);
     notifyAdmin(`💳 <b>UPI UPDATED:</b>\n👤 User: <b>${req.user.username}</b>\n🔄 Old: <code>${oldUpi}</code>\n✅ New: <code>${upi}</code>`);
     res.json({ success: true });
 });
@@ -568,11 +636,39 @@ app.post('/api/activity', authenticateSession, (req, res) => {
     const { action, platform, link } = req.body;
     const db = readDB();
     db.activities.push({ id: uuid.v4(), user_id: req.user._id, username: req.user.username, action, platform, link, created_at: new Date().toISOString() });
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ success: true });
 });
 
-// Admin Panel APIs
+app.post('/api/admin/broadcast', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { message } = req.body;
+    const db = readDB();
+    db.meta.announcement = message;
+    writeDB_Synced(db);
+    res.json({ success: true });
+});
+
+app.post('/api/admin/maintenance', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { enabled } = req.body;
+    const db = readDB();
+    db.meta.maintenance_mode = enabled;
+    writeDB_Synced(db);
+    res.json({ success: true, enabled: db.meta.maintenance_mode });
+});
+
+app.post('/api/admin/user/ban', authenticateSession, (req, res) => {
+    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+    const { userId, banned } = req.body;
+    const db = readDB();
+    const uIdx = db.users.findIndex(u => u.id === userId);
+    if (uIdx !== -1) {
+        db.users[uIdx].is_banned = banned;
+        writeDB_Synced(db);
+    }
+    res.json({ success: true });
+});
 app.get('/api/admin/stats', authenticateSession, (req, res) => {
     if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const db = readDB();
@@ -594,7 +690,9 @@ app.get('/api/admin/stats', authenticateSession, (req, res) => {
         rejectedClaims,
         totalProfit: totalProfit.toFixed(2),
         totalPaid: totalPaid.toFixed(2),
-        totalActivities: db.activities.length
+        totalActivities: db.activities.length,
+        maintenanceMode: !!db.meta.maintenance_mode,
+        announcement: db.meta.announcement || ''
     });
 });
 
@@ -636,7 +734,7 @@ app.post('/api/admin/approve', authenticateSession, (req, res) => {
         db.users[uIdx].pending_payout = (parseFloat(db.users[uIdx].pending_payout) || 0) + parseFloat(profitAmount);
         db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) + 1;
     }
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ success: true });
 });
 
@@ -655,7 +753,7 @@ app.post('/api/admin/reject', authenticateSession, (req, res) => {
     if (uIdx !== -1) {
         db.users[uIdx].trust_score = (db.users[uIdx].trust_score || 0) - 2;
     }
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ success: true });
 });
 
@@ -664,7 +762,7 @@ app.post('/api/admin/claim/delete', authenticateSession, (req, res) => {
     const { claimId } = req.body;
     const db = readDB();
     db.claims = db.claims.filter(c => c.id !== claimId);
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ success: true });
 });
 
@@ -672,7 +770,7 @@ app.post('/api/admin/claims/purge-all', authenticateSession, (req, res) => {
     if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const db = readDB();
     db.claims = [];
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'All claims purged' });
 });
 
@@ -690,7 +788,7 @@ app.post('/api/admin/user/update', authenticateSession, (req, res) => {
     if (updates.totalEarnings !== undefined) db.users[uIdx].total_earnings = updates.totalEarnings;
     if (updates.paymentSettings?.upi) db.users[uIdx].upi = updates.paymentSettings.upi;
 
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ success: true });
 });
 
@@ -702,7 +800,7 @@ app.post('/api/admin/user/delete', authenticateSession, (req, res) => {
     db.claims = db.claims.filter(c => c.user_id !== userId);
     db.payouts = db.payouts.filter(p => p.user_id !== userId);
     db.activities = db.activities.filter(a => a.user_id !== userId);
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'User deleted permanently' });
 });
 
@@ -730,7 +828,7 @@ app.post('/api/admin/user/send-withdraw', authenticateSession, (req, res) => {
         admin_note: 'PAID VIA ADMIN PANEL'
     });
 
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: `Successfully paid ₹${amountVal}` });
 });
 
@@ -739,7 +837,7 @@ app.post('/api/admin/user/purge-claims', authenticateSession, (req, res) => {
     const { userId } = req.body;
     const db = readDB();
     db.claims = db.claims.filter(c => c.user_id !== userId);
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'Claims purged' });
 });
 
@@ -748,7 +846,7 @@ app.post('/api/admin/user/purge-history', authenticateSession, (req, res) => {
     const { userId } = req.body;
     const db = readDB();
     db.payouts = db.payouts.filter(p => p.user_id !== userId);
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'History purged' });
 });
 
@@ -758,7 +856,7 @@ app.post('/api/admin/user/purge-profit', authenticateSession, (req, res) => {
     const db = readDB();
     const uIdx = db.users.findIndex(u => u.id === userId);
     if (uIdx !== -1) db.users[uIdx].total_earnings = 0;
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'Profit reset' });
 });
 
@@ -768,7 +866,7 @@ app.post('/api/admin/user/purge-pending', authenticateSession, (req, res) => {
     const db = readDB();
     const uIdx = db.users.findIndex(u => u.id === userId);
     if (uIdx !== -1) db.users[uIdx].pending_payout = 0;
-    writeDB(db);
+    writeDB_Synced(db);
     res.json({ message: 'Pending balance reset' });
 });
 
@@ -784,7 +882,7 @@ app.post('/api/admin/user/reset-password', authenticateSession, (req, res) => {
         const freshIdx = freshDb.users.findIndex(u => u.id === userId);
         if (freshIdx !== -1) {
             freshDb.users[freshIdx].password = hash;
-            writeDB(freshDb);
+            writeDB_Synced(freshDb);
         }
     });
     res.json({ message: 'Password reset scheduled' });

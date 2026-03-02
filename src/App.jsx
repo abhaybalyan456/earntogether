@@ -286,6 +286,30 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
         </div>
       </div>
 
+      {user.meta?.announcement && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={{
+            background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.1), rgba(234, 179, 8, 0.2))',
+            border: '1px solid var(--gold-muted)',
+            borderRadius: '15px',
+            padding: '1.2rem 2rem',
+            marginBottom: '2rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1.5rem',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+          }}
+        >
+          <Sparkles size={24} color="var(--gold)" className="flicker" />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.6rem', fontWeight: 900, color: 'var(--gold)', letterSpacing: '0.2em', marginBottom: '4px' }}>OFFICIAL BROADCAST</div>
+            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{user.meta.announcement}</div>
+          </div>
+        </motion.div>
+      )}
+
       <div style={{ background: 'rgba(234, 179, 8, 0.05)', border: '1px solid var(--gold-muted)', borderRadius: '15px', padding: '1.5rem 2.5rem', marginBottom: '3rem', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
         <Clock size={32} color="var(--gold)" className="pulse" />
         <div>
@@ -762,9 +786,14 @@ function App() {
       const response = await fetch(`${API_BASE}/me?t=${timestamp}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (response.status === 503) {
+        setView('maintenance');
+        return;
+      }
       if (response.ok) {
         const userData = await response.json();
         setUser(userData);
+        if (userData.meta?.maintenance_mode && !userData.isAdmin) setView('maintenance');
       } else {
         // Token invalid/expired — clear it
         localStorage.removeItem('nexlink_token');
@@ -1072,6 +1101,26 @@ function App() {
           </motion.div>
         ) : view === 'dash' ? (
           <UserDashboard user={user} onUpdateSettings={updateSettings} onRefresh={checkAuthStatus} onBack={() => setView('home')} onAdmin={() => setView('admin')} platforms={platforms} />
+        ) : view === 'maintenance' ? (
+          <motion.div key="maintenance" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ height: '80vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+            <div style={{ padding: '3rem', border: '1px solid var(--gold)', borderRadius: '2rem', background: 'rgba(234, 180, 8, 0.05)', maxWidth: '600px' }}>
+              <ShieldAlert size={64} color="var(--gold)" style={{ marginBottom: '2rem' }} />
+              <h2 style={{ fontSize: '2.5rem', marginBottom: '1.5rem' }} className="gold-gradient">VAULT MAINTENANCE</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', lineHeight: '1.8' }}>
+                The Protocol is currently undergoing critical upgrades to ensure your data and earnings remain 100% secure.
+                Our engineers are working fast to bring everything back online.
+                <br /><br />
+                <b>Check our Telegram for live updates.</b>
+              </p>
+              <button
+                onClick={() => { localStorage.removeItem('nexlink_token'); setUser(null); setView('home'); }}
+                className="lux-btn-ghost"
+                style={{ marginTop: '3rem', width: '100%' }}
+              >
+                LOGOUT
+              </button>
+            </div>
+          </motion.div>
         ) : (
           <AdminPanel onBack={() => setView('dash')} />
         )}
