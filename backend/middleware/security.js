@@ -99,6 +99,7 @@ module.exports = {
     sanitizeMiddleware,
     authenticateSession,
     setSecureCookie,
+    SECRET_KEY,
     securityHeaders: helmet({
         contentSecurityPolicy: {
             directives: {

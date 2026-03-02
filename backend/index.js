@@ -640,7 +640,8 @@ app.post('/api/register', async (req, res) => {
     const newUser = { id: uuid.v4(), username, password: await bcrypt.hash(password, 10), trust_score: 0, total_earnings: 0, pending_payout: 0, created_at: new Date().toISOString() };
     db.users.push(newUser);
     writeDB_Synced(db);
-    const token = jwt.sign({ _id: newUser.id, username }, SECRET_KEY);
+    const token = jwt.sign({ _id: newUser.id, username }, SECRET_KEY, { expiresIn: '7d' });
+    setSecureCookie(res, token);
     res.json({ token, user: mapUser(newUser) });
 });
 
@@ -990,6 +991,26 @@ app.get('/api/admin/user/:userId/payouts', authenticateSession, (req, res) => {
     const { userId } = req.params;
     const db = readDB();
     res.json(db.payouts.filter(p => p.user_id === userId).map(p => ({ ...p, _id: p.id })));
+});
+
+// --- API 404 FALLBACK ---
+app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: 'Endpoint not found. Vault communications intact.' });
+});
+
+// --- SPA ROUTING: SERVE INDEX.HTML FOR ALL OTHER ROUTES ---
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../dist/index.html'));
+});
+
+// --- GLOBAL JSON ERROR HANDLER ---
+app.use((err, req, res, next) => {
+    console.error('[PROTOCOL ERROR]', err.stack);
+    res.status(req.status || 500).json({
+        error: 'Vault Communication Failure',
+        protocol: 'STEEL_VAULT_ERROR',
+        status: req.status || 500
+    });
 });
 
 const PORT = process.env.PORT || 5000;
