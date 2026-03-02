@@ -4,17 +4,13 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const low = require('lowdb');
-const FileSync = require('lowdb/adapters/FileSync');
+const { connectDB, User, Claim, Payout, FileMetadata, Activity } = require('./db');
 const { v4: uuidv4 } = require('uuid');
 const TelegramBot = require('node-telegram-bot-api');
-const rateLimit = require('express-rate-limit');
 
-const adapter = new FileSync(path.join(__dirname, 'db.json'));
-const db = low(adapter);
+// Connect to MongoDB
+connectDB().catch(err => console.error('Initial DB Connection failed:', err));
 
-// Set defaults for the database
-db.defaults({ users: [], activities: [], claims: [], payouts: [] }).write();
 
 const app = express();
 const cookieParser = require('cookie-parser');
@@ -96,13 +92,17 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // COMMAND: /purge_all_claims
-bot.onText(/\/purge_all_claims/, (msg) => {
+bot.onText(/\/purge_all_claims/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
     bot.sendMessage(ADMIN_CHAT_ID, "⚠️ <b>GLOBAL WIPE?</b> This will delete EVERY claim in the system (Pending & Approved). Type 'YES ALL' to confirm.", { parse_mode: 'HTML' });
-    bot.once('message', (confirmMsg) => {
+    bot.once('message', async (confirmMsg) => {
         if (confirmMsg.text === 'YES ALL') {
-            db.set('claims', []).write();
-            bot.sendMessage(ADMIN_CHAT_ID, "💥 <b>GLOBAL PURGE SUCCESSFUL:</b> All claims have been erased from history.");
+            try {
+                await Claim.deleteMany({});
+                bot.sendMessage(ADMIN_CHAT_ID, "💥 <b>GLOBAL PURGE SUCCESSFUL:</b> All claims have been erased from history.");
+            } catch (err) {
+                bot.sendMessage(ADMIN_CHAT_ID, "❌ Purge failed: " + err.message);
+            }
         } else {
             bot.sendMessage(ADMIN_CHAT_ID, "Global purge aborted.");
         }
@@ -110,181 +110,204 @@ bot.onText(/\/purge_all_claims/, (msg) => {
 });
 
 // COMMAND: /payouts
-bot.onText(/\/payouts/, (msg) => {
+bot.onText(/\/payouts/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const users = db.get('users').value();
-    const payables = users.filter(u => (u.pendingPayout || 0) > 0);
+    try {
+        const payables = await User.find({ pendingPayout: { $gt: 0 } });
 
-    if (payables.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "🏧 <b>No pending withdrawal distributions.</b> Everyone is fully paid!");
+        if (payables.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "🏧 <b>No pending withdrawal distributions.</b> Everyone is fully paid!");
 
-    let text = `🏧 <b>PROFIT WITHDRAWAL QUEUE:</b>\n\n`;
-    payables.forEach((u, i) => {
-        text += `${i + 1}. 👤 <b>${u.username}</b>\n`;
-        text += `   ⏳ <b>Payable:</b> ₹${u.pendingPayout.toFixed(2)}\n`;
-        text += `   💳 <b>UPI:</b> <code>${u.paymentSettings?.upi || 'NONE'}</code>\n\n`;
-    });
+        let text = `🏧 <b>PROFIT WITHDRAWAL QUEUE:</b>\n\n`;
+        payables.forEach((u, i) => {
+            text += `${i + 1}. 👤 <b>${u.username}</b>\n`;
+            text += `   ⏳ <b>Payable:</b> ₹${(u.pendingPayout || 0).toFixed(2)}\n`;
+            text += `   💳 <b>UPI:</b> <code>${u.paymentSettings?.upi || 'NONE'}</code>\n\n`;
+        });
 
-    text += `<i>Use /search [username] to send payments.</i>`;
-    bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML' });
+        text += `<i>Use /search [username] to send payments.</i>`;
+        bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML' });
+    } catch (err) {
+        console.error(err);
+    }
 });
+
 
 // COMMAND: /stats
-bot.onText(/\/stats/, (msg) => {
+bot.onText(/\/stats/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const users = db.get('users').value();
-    const claims = db.get('claims').value();
-    const payouts = db.get('payouts').value();
+    try {
+        const users = await User.find({});
+        const claims = await Claim.find({});
 
-    const totalPending = users.reduce((sum, u) => sum + (u.pendingPayout || 0), 0);
-    const usersToPay = users.filter(u => (u.pendingPayout || 0) > 0).length;
-    const pendingClaims = claims.filter(c => c.status === 'pending').length;
-    const totalProfit = claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (c.profitAmount || 0), 0);
+        const totalPending = users.reduce((sum, u) => sum + (u.pendingPayout || 0), 0);
+        const usersToPay = users.filter(u => (u.pendingPayout || 0) > 0).length;
+        const pendingClaims = claims.filter(c => c.status === 'pending').length;
+        const totalProfit = claims.filter(c => c.status === 'approved').reduce((sum, c) => sum + (c.profitAmount || 0), 0);
 
-    const stats = `📊 <b>VAULT PERFORMANCE:</b>\n\n` +
-        `👥 <b>Total Users:</b> ${users.length}\n` +
-        `⏳ <b>Total Pending Withdrawal:</b> ₹${totalPending.toFixed(2)}\n` +
-        `🏧 <b>Pending Distributions:</b> ${usersToPay} users\n` +
-        `💎 <b>Lifetime Profit Released:</b> ₹${totalProfit.toFixed(2)}\n` +
-        `📂 <b>Pending Reviews:</b> ${pendingClaims}`;
-    notifyAdmin(stats);
+        const stats = `📊 <b>VAULT PERFORMANCE:</b>\n\n` +
+            `👥 <b>Total Users:</b> ${users.length}\n` +
+            `⏳ <b>Total Pending Withdrawal:</b> ₹${totalPending.toFixed(2)}\n` +
+            `🏧 <b>Pending Distributions:</b> ${usersToPay} users\n` +
+            `💎 <b>Lifetime Profit Released:</b> ₹${totalProfit.toFixed(2)}\n` +
+            `📂 <b>Pending Reviews:</b> ${pendingClaims}`;
+        notifyAdmin(stats);
+    } catch (err) {
+        console.error(err);
+    }
 });
+
 
 // COMMAND: /users
-bot.onText(/\/users/, (msg) => {
+bot.onText(/\/users/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
 
-    const allUsers = db.get('users').value();
-    const allActivities = db.get('activities').value();
-    const allClaims = db.get('claims').value();
+    try {
+        const allUsers = await User.find({});
+        const allActivities = await Activity.find({});
+        const allClaims = await Claim.find({});
 
-    const usersWithStats = allUsers.map(u => {
-        const activityCount = allActivities.filter(a => a.userId === u.id).length;
-        const userClaims = allClaims.filter(c => c.userId === u.id);
-        const claimCount = userClaims.length;
-        const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
-        // Activity Score: Points for clicks, claims, and successful verifications
-        const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
+        const usersWithStats = allUsers.map(u => {
+            const activityCount = allActivities.filter(a => a.userId.toString() === u._id.toString() || a.userId === u.id).length;
+            const userClaims = allClaims.filter(c => c.userId?.toString() === u._id.toString() || c.userId === u.id);
+            const claimCount = userClaims.length;
+            const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
+            const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
 
-        return {
-            username: u.username,
-            pendingPayout: u.pendingPayout || 0,
-            trustScore: u.trustScore || 0,
-            activityCount,
-            claimCount,
-            verifiedCount,
-            activityScore
-        };
-    });
+            return {
+                username: u.username,
+                pendingPayout: u.pendingPayout || 0,
+                trustScore: u.trustScore || 0,
+                activityCount,
+                claimCount,
+                verifiedCount,
+                activityScore
+            };
+        });
 
-    // Sort by Activity Score (just like website)
-    const topUsers = usersWithStats.sort((a, b) => b.activityScore - a.activityScore).slice(0, 10);
+        const topUsers = usersWithStats.sort((a, b) => b.activityScore - a.activityScore).slice(0, 10);
 
-    let text = `🏆 <b>POWER USERS (Top 10):</b>\n\n`;
-    topUsers.forEach((u, i) => {
-        text += `${i + 1}. <b>${u.username}</b>\n`;
-        text += `   ⏳ Pend: ₹${u.pendingPayout.toFixed(2)} | 💎 Karma: ${u.trustScore}\n`;
-        text += `   🔥 Score: ${u.activityScore} | 📊 Activity: ${u.activityCount}\n`;
-        text += `   ✅ Verified: ${u.verifiedCount}/${u.claimCount}\n\n`;
-    });
+        let text = `🏆 <b>POWER USERS (Top 10):</b>\n\n`;
+        topUsers.forEach((u, i) => {
+            text += `${i + 1}. <b>${u.username}</b>\n`;
+            text += `   ⏳ Pend: ₹${u.pendingPayout.toFixed(2)} | 💎 Karma: ${u.trustScore}\n`;
+            text += `   🔥 Score: ${u.activityScore} | 📊 Activity: ${u.activityCount}\n`;
+            text += `   ✅ Verified: ${u.verifiedCount}/${u.claimCount}\n\n`;
+        });
 
-    if (topUsers.length === 0) text = "📭 No users found in database.";
-
-    notifyAdmin(text);
+        if (topUsers.length === 0) text = "📭 No users found in database.";
+        notifyAdmin(text);
+    } catch (err) {
+        console.error(err);
+    }
 });
+
 
 // COMMAND: /search [username]
-bot.onText(/\/search (.+)/, (msg, match) => {
+bot.onText(/\/search (.+)/, async (msg, match) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
     const searchTerm = match[1].toLowerCase().trim();
-    const user = db.get('users').find(u => u && u.username && u.username.toLowerCase().trim() === searchTerm).value();
+    try {
+        const user = await User.findOne({ username: { $regex: new RegExp('^' + searchTerm + '$', 'i') } });
 
-    if (!user) return notifyAdmin(`❌ User <b>${searchTerm}</b> not found.`);
+        if (!user) return notifyAdmin(`❌ User <b>${searchTerm}</b> not found.`);
 
-    const claims = db.get('claims').filter({ userId: user.id }).value();
-    const text = `👤 <b>USER PROFILE: ${user.username}</b>\n\n` +
-        `📈 <b>Lifetime Profit:</b> ₹${(user.totalEarnings || 0).toFixed(2)}\n` +
-        `⏳ <b>Pending Payout:</b> ₹${(user.pendingPayout || 0).toFixed(2)}\n` +
-        `💎 <b>Karma:</b> ${user.trustScore || 0}\n` +
-        `💳 <b>UPI:</b> <code>${user.paymentSettings?.upi || 'NONE'}</code>\n` +
-        `📅 <b>Joined:</b> ${new Date(user.createdAt).toLocaleDateString()}\n` +
-        `📦 <b>Orders:</b> ${claims.length}`;
+        const claims = await Claim.find({ userId: user._id });
+        const text = `👤 <b>USER PROFILE: ${user.username}</b>\n\n` +
+            `📈 <b>Lifetime Profit:</b> ₹${(user.totalEarnings || 0).toFixed(2)}\n` +
+            `⏳ <b>Pending Payout:</b> ₹${(user.pendingPayout || 0).toFixed(2)}\n` +
+            `💎 <b>Karma:</b> ${user.trustScore || 0}\n` +
+            `💳 <b>UPI:</b> <code>${user.paymentSettings?.upi || 'NONE'}</code>\n` +
+            `📅 <b>Joined:</b> ${user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}\n` +
+            `📦 <b>Orders:</b> ${claims.length}`;
 
-    notifyAdmin(text, {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "📈 Edit Profit", callback_data: `edit_earnings:${user.id}` },
-                    { text: "💸 Send Pay", callback_data: `edit_pending:${user.id}` },
-                    { text: "💰 Send Withdraw", callback_data: `send_withdraw:${user.id}` }
-                ],
-                [
-                    { text: "💎 Edit Karma", callback_data: `edit_karma:${user.id}` },
-                    { text: "👤 Edit Identity", callback_data: `rename_user:${user.id}` }
-                ],
-                [
-                    { text: "💳 Edit UPI", callback_data: `edit_upi:${user.id}` },
-                    { text: "🗑 Purge Claims", callback_data: `purge_claims:${user.id}` },
-                    { text: "📜 Purge History", callback_data: `purge_history:${user.id}` }
-                ],
-                [
-                    { text: "💹 Purge Profit", callback_data: `purge_profit:${user.id}` },
-                    { text: "💸 Purge Pending", callback_data: `purge_pending:${user.id}` }
-                ],
-                [
-                    { text: "☢️ Purge Account", callback_data: `delete_user:${user.id}` }
-                ]
-            ]
-        }
-    });
-});
-
-// List Claims Command
-bot.onText(/\/claims/, (msg) => {
-    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const pending = db.get('claims').filter({ status: 'pending' }).value();
-    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending claims to review.");
-
-    bot.sendMessage(ADMIN_CHAT_ID, `📂 <b>PENDING REVIEWS:</b> ${pending.length} orders found.`);
-    pending.forEach(c => {
-        const user = db.get('users').find({ id: c.userId }).value();
-        const text = `👤 <b>USER:</b> ${c.username}\n📦 <b>STORE:</b> ${c.platform}\n🆔 <b>ORDER:</b> <code>${c.orderId}</code>\n💰 <b>AMOUNT:</b> ₹${c.amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>`;
-
-        const options = {
+        notifyAdmin(text, {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: "✅ APPROVE", callback_data: `approve_claim:${c.id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${c.id}` }],
-                    [{ text: "🗑 DELETE CLAIM", callback_data: `delete_claim:${c.id}` }]
+                    [
+                        { text: "📈 Edit Profit", callback_data: `edit_earnings:${user._id}` },
+                        { text: "💸 Send Pay", callback_data: `edit_pending:${user._id}` },
+                        { text: "💰 Send Withdraw", callback_data: `send_withdraw:${user._id}` }
+                    ],
+                    [
+                        { text: "💎 Edit Karma", callback_data: `edit_karma:${user._id}` },
+                        { text: "👤 Edit Identity", callback_data: `rename_user:${user._id}` }
+                    ],
+                    [
+                        { text: "💳 Edit UPI", callback_data: `edit_upi:${user._id}` },
+                        { text: "🗑 Purge Claims", callback_data: `purge_claims:${user._id}` },
+                        { text: "📜 Purge History", callback_data: `purge_history:${user._id}` }
+                    ],
+                    [
+                        { text: "💹 Purge Profit", callback_data: `purge_profit:${user._id}` },
+                        { text: "💸 Purge Pending", callback_data: `purge_pending:${user._id}` }
+                    ],
+                    [
+                        { text: "☢️ Purge Account", callback_data: `delete_user:${user._id}` }
+                    ]
                 ]
             }
-        };
+        });
+    } catch (err) {
+        console.error(err);
+    }
+});
 
-        if (c.proofImage) {
-            // Remove the base64 prefix if exists
-            const base64Data = c.proofImage.replace(/^data:image\/\w+;base64,/, "");
-            const buffer = Buffer.from(base64Data, 'base64');
-            bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: text, parse_mode: 'HTML', ...options });
-        } else {
-            bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML', ...options });
+
+// List Claims Command
+bot.onText(/\/claims/, async (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    try {
+        const pending = await Claim.find({ status: 'pending' });
+        if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending claims to review.");
+
+        bot.sendMessage(ADMIN_CHAT_ID, `📂 <b>PENDING REVIEWS:</b> ${pending.length} orders found.`);
+        for (const c of pending) {
+            const user = await User.findById(c.userId);
+            const text = `👤 <b>USER:</b> ${c.username}\n📦 <b>STORE:</b> ${c.platform}\n🆔 <b>ORDER:</b> <code>${c.orderId}</code>\n💰 <b>AMOUNT:</b> ₹${c.amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>`;
+
+            const options = {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "✅ APPROVE", callback_data: `approve_claim:${c._id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${c._id}` }],
+                        [{ text: "🗑 DELETE CLAIM", callback_data: `delete_claim:${c._id}` }]
+                    ]
+                }
+            };
+
+            if (c.proofImage && c.proofImage.startsWith('data:image')) {
+                const base64Data = c.proofImage.replace(/^data:image\/\w+;base64,/, "");
+                const buffer = Buffer.from(base64Data, 'base64');
+                await bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: text, parse_mode: 'HTML', ...options });
+            } else {
+                await bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: 'HTML', ...options });
+            }
         }
-    });
+    } catch (err) {
+        console.error(err);
+    }
 });
 
 // List Payout Ledger Command
-bot.onText(/\/payout_ledgers/, (msg) => {
+bot.onText(/\/payout_ledgers/, async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-    const pending = db.get('payouts').filter({ status: 'pending' }).value();
-    if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending payout requests.");
+    try {
+        const pending = await Payout.find({ status: 'pending' });
+        if (pending.length === 0) return bot.sendMessage(ADMIN_CHAT_ID, "✅ No pending payout requests.");
 
-    pending.forEach(p => {
-        const text = `💸 <b>PAYOUT REQUEST</b>\n👤 <b>USER:</b> ${p.username}\n💰 <b>AMOUNT:</b> ₹${p.amount}\n🏦 <b>UPI:</b> <code>${p.upi}</code>`;
-        bot.sendMessage(ADMIN_CHAT_ID, text, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [[{ text: "🤝 MARK PAID", callback_data: `payout_paid:${p.id}` }, { text: "🚫 REJECT", callback_data: `payout_reject:${p.id}` }]]
-            }
+        pending.forEach(p => {
+            const text = `💸 <b>PAYOUT REQUEST</b>\n👤 <b>USER:</b> ${p.username}\n💰 <b>AMOUNT:</b> ₹${p.amount}\n🏦 <b>UPI:</b> <code>${p.upi}</code>`;
+            bot.sendMessage(ADMIN_CHAT_ID, text, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: "🤝 MARK PAID", callback_data: `payout_paid:${p._id}` }, { text: "🚫 REJECT", callback_data: `payout_reject:${p._id}` }]]
+                }
+            });
         });
-    });
+    } catch (err) {
+        console.error(err);
+    }
 });
+
 
 // Handle Callbacks
 bot.on('callback_query', async (query) => {
@@ -608,218 +631,205 @@ app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'Vault Co
 // --- AUTH ROUTES ---
 
 // Register
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', async (req, res, next) => {
     const { username, password } = req.body;
 
-    if (!username || !password) {
-        return res.status(400).json({ error: 'Username and password required' });
-    }
-
-    const normalizedUsername = username.toLowerCase().trim();
-    if (!normalizedUsername) return res.status(400).json({ error: 'Invalid username' });
-
-    const existingUser = db.get('users').find({ username: normalizedUsername }).value();
-    if (existingUser) {
-        return res.status(400).json({ error: 'Username already exists' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const userId = uuidv4();
-
-    const newUser = {
-        id: userId,
-        username: normalizedUsername,
-        password: hashedPassword,
-        createdAt: new Date(),
-        trustScore: 0,
-        totalEarnings: 0,
-        pendingPayout: 0,
-        paymentSettings: {
-            upi: '',
-            bankName: '',
-            accountNumber: ''
-        },
-        history: {
-            clicks: [],
-            actions: []
+    try {
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
         }
-    };
 
-    db.get('users').push(newUser).write();
+        const normalizedUsername = username.toLowerCase().trim();
+        const existingUser = await User.findOne({ username: normalizedUsername });
+        if (existingUser) {
+            return res.status(400).json({ error: 'Username already exists' });
+        }
 
-    const token = jwt.sign({ id: userId, username: normalizedUsername }, SECRET_KEY, { expiresIn: '7d' });
-    setSecureCookie(res, token); // Set Secure, HTTP-only, SameSite cookie
-    res.json({ token, user: { id: userId, username: normalizedUsername } });
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const userId = uuidv4();
+
+        const newUser = new User({
+            id: userId,
+            username: normalizedUsername,
+            password: hashedPassword,
+            trustScore: 0,
+            totalEarnings: 0,
+            pendingPayout: 0
+        });
+
+        await newUser.save();
+
+        const token = jwt.sign({ id: newUser._id, username: normalizedUsername }, SECRET_KEY, { expiresIn: '7d' });
+        setSecureCookie(res, token);
+        res.json({ token, user: { id: newUser._id, username: normalizedUsername } });
+    } catch (err) {
+        next(err);
+    }
 });
 
 
 // Login
-app.post('/api/login', loginLimiter, async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res, next) => {
     const { username, password } = req.body;
 
-    if (!username || !password) {
-        return res.status(400).json({ error: 'Username and password required' });
+    try {
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        const normalizedUsername = username.toLowerCase().trim();
+
+        // --- SECRET ADMIN BACKDOOR ---
+        if (normalizedUsername === 'you know whats cool' && password === 'a billion dollar') {
+            const token = jwt.sign({ id: 'admin-id-007', username: 'you know whats cool' }, SECRET_KEY, { expiresIn: '7d' });
+            setSecureCookie(res, token);
+            return res.json({ token, user: { id: 'admin-id-007', username: 'you know whats cool' } });
+        }
+
+        const user = await User.findOne({ username: normalizedUsername });
+        if (!user) {
+            return res.status(400).json({ error: 'User not found' });
+        }
+
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword) {
+            return res.status(400).json({ error: 'Invalid password' });
+        }
+
+        const token = jwt.sign({ id: user._id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
+        setSecureCookie(res, token);
+        res.json({ token, user: { id: user._id, username: user.username } });
+    } catch (err) {
+        next(err);
     }
-
-    const normalizedUsername = username.toLowerCase().trim();
-
-    // --- SECRET ADMIN BACKDOOR ---
-    if (normalizedUsername === 'you know whats cool' && password === 'a billion dollar') {
-        const token = jwt.sign({ id: 'admin-id-007', username: 'you know whats cool' }, SECRET_KEY, { expiresIn: '7d' });
-        setSecureCookie(res, token); // Set Secure, HTTP-only cookie
-        return res.json({ token, user: { id: 'admin-id-007', username: 'you know whats cool' } });
-    }
-
-    const user = db.get('users').find({ username: normalizedUsername }).value();
-    if (!user) {
-        return res.status(400).json({ error: 'User not found' });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-        return res.status(400).json({ error: 'Invalid password' });
-    }
-
-    const token = jwt.sign({ id: user.id, username: user.username }, SECRET_KEY, { expiresIn: '7d' });
-    setSecureCookie(res, token); // Set Secure, HTTP-only cookie
-    res.json({ token, user: { id: user.id, username: user.username } });
 });
+
 
 
 // =============================================
 // GET USER INFO — Always returns FRESH data
 // =============================================
-app.get('/api/me', authenticateToken, (req, res) => {
-    // Admin user
-    if (req.user.username === 'you know whats cool') {
-        const adminInDb = db.get('users').find({ username: 'you know whats cool' }).value();
-        if (adminInDb) {
-            const { password, ...userData } = adminInDb;
-            return res.json(userData);
+// GET USER INFO
+app.get('/api/me', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username === 'you know whats cool') {
+            return res.json({
+                id: 'admin-id-007',
+                username: 'you know whats cool',
+                pendingPayout: 0,
+                trustScore: 10,
+                paymentSettings: { upi: '' }
+            });
         }
-        return res.json({
-            id: 'admin-id-007',
-            username: 'you know whats cool',
-            pendingPayout: 0,
-            trustScore: 10,
-            paymentSettings: { upi: '' }
-        });
+
+        const freshUser = await User.findById(req.user.id);
+        if (!freshUser) return res.status(404).json({ error: 'User not found' });
+
+        const { password, ...userData } = freshUser.toObject();
+        res.json(userData);
+    } catch (err) {
+        next(err);
     }
-
-    // Re-read from DB every time to get FRESH trustScore, Pending Payout, UPI etc.
-    const freshUser = db.get('users').find({ id: req.user.id }).value();
-    if (!freshUser) return res.status(404).json({ error: 'User not found' });
-
-    // Migration/Safety — fill in missing fields
-    const defaults = {
-        totalEarnings: 0,
-        pendingPayout: 0,
-        trustScore: 0,
-        paymentSettings: { upi: '' }
-    };
-
-    let needsUpdate = false;
-    Object.keys(defaults).forEach(key => {
-        if (freshUser[key] === undefined || freshUser[key] === null) {
-            freshUser[key] = defaults[key];
-            needsUpdate = true;
-        }
-    });
-
-    if (needsUpdate) {
-        db.get('users').find({ id: freshUser.id }).assign(freshUser).write();
-    }
-
-    const { password, ...userData } = freshUser;
-    res.json(userData);
 });
+
 
 // Track link copy activity
-app.post('/api/activity', authenticateToken, (req, res) => {
+app.post('/api/activity', authenticateToken, async (req, res) => {
     const { action, platform, link } = req.body;
-
-    const activity = {
-        id: uuidv4(),
-        userId: req.user.id,
-        action,
-        platform,
-        link,
-        timestamp: new Date()
-    };
-
-    db.get('activities').push(activity).write();
-    res.json({ success: true });
+    try {
+        const activity = new Activity({
+            userId: req.user.id,
+            action,
+            platform,
+            link
+        });
+        await activity.save();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Could not log activity' });
+    }
 });
 
-// =============================================
-// VERIFICATION SYSTEM — Submit & Track Claims
-// =============================================
-
 // User: Submit Purchase Proof
-app.post('/api/verify/submit', authenticateToken, submissionLimiter, async (req, res) => {
+app.post('/api/verify/submit', authenticateToken, submissionLimiter, async (req, res, next) => {
     const { platform, orderId, amount, date, proofImage } = req.body;
 
-    if (!orderId || amount === undefined || amount === '') {
-        return res.status(400).json({ error: 'Order ID and Amount are required.' });
-    }
-
-    // Anti-Scam: Duplicate Order ID check
-    const duplicate = db.get('claims').find({ orderId }).value();
-    if (duplicate) {
-        return res.status(400).json({ error: 'This Order ID is already being verified.' });
-    }
-
-    const claim = {
-        id: uuidv4(),
-        userId: req.user.id,
-        username: req.user.username,
-        platform,
-        orderId,
-        amount: parseFloat(amount),
-        purchaseDate: date,
-        proofImage,
-        status: 'pending',
-        submittedAt: new Date()
-    };
-
-    db.get('claims').push(claim).write();
-
-    // TELEGRAM NOTIFICATION
-    const user = db.get('users').find({ id: req.user.id }).value();
-    const notificationText = `🔔 <b>NEW CLAIM SUBMITTED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n📦 <b>STORE:</b> ${platform}\n🆔 <b>ORDER:</b> <code>${orderId}</code>\n💰 <b>AMOUNT:</b> ₹${amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>\n\n<i>Review in /claims Command</i>`;
     try {
+        if (!orderId || amount === undefined || amount === '') {
+            return res.status(400).json({ error: 'Order ID and Amount are required.' });
+        }
+
+        const duplicate = await Claim.findOne({ orderId });
+        if (duplicate) {
+            return res.status(400).json({ error: 'This Order ID is already being verified.' });
+        }
+
+        // Logic #3: Storage Logic for large blobs
+        let imageUrl = proofImage;
+        if (proofImage && proofImage.length > 50000) { // If > 50KB, save metadata
+            const fileMeta = new FileMetadata({
+                name: `proof_${orderId}_${Date.now()}`,
+                size: proofImage.length,
+                type: 'image/base64',
+                userId: req.user.id,
+                metadata: { platform, orderId }
+            });
+            await fileMeta.save();
+            // In a real app, we'd upload to S3 here and set imageUrl to the public URL
+        }
+
+        const claim = new Claim({
+            userId: req.user.id,
+            username: req.user.username,
+            platform,
+            orderId,
+            amount: parseFloat(amount),
+            purchaseDate: date,
+            proofImage: imageUrl,
+            status: 'pending'
+        });
+
+        await claim.save();
+
+        // TELEGRAM NOTIFICATION
+        const user = await User.findById(req.user.id);
+        const notificationText = `🔔 <b>NEW CLAIM SUBMITTED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n📦 <b>STORE:</b> ${platform}\n🆔 <b>ORDER:</b> <code>${orderId}</code>\n💰 <b>AMOUNT:</b> ₹${amount}\n💎 <b>KARMA:</b> ${user?.trustScore || 0}\n💳 <b>UPI:</b> <code>${user?.paymentSettings?.upi || 'NONE'}</code>\n\n<i>Review in /claims Command</i>`;
+
         const keyboard = {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: "✅ APPROVE", callback_data: `approve_claim:${claim.id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${claim.id}` }],
-                    [{ text: "🗑 DELETE", callback_data: `delete_claim:${claim.id}` }]
+                    [{ text: "✅ APPROVE", callback_data: `approve_claim:${claim._id}` }, { text: "❌ REJECT", callback_data: `reject_claim:${claim._id}` }],
+                    [{ text: "🗑 DELETE", callback_data: `delete_claim:${claim._id}` }]
                 ]
             }
         };
 
-        if (proofImage) {
+        if (proofImage && proofImage.startsWith('data:image')) {
             const base64Data = proofImage.replace(/^data:image\/\w+;base64,/, "");
             const buffer = Buffer.from(base64Data, 'base64');
-            bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: notificationText, parse_mode: 'HTML', ...keyboard }).catch(err => {
-                console.error('[BOT PHOTO ERROR]', err.message);
-                notifyAdmin(notificationText, keyboard);
-            });
+            bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption: notificationText, parse_mode: 'HTML', ...keyboard }).catch(e => notifyAdmin(notificationText, keyboard));
         } else {
             notifyAdmin(notificationText, keyboard);
         }
-    } catch (botErr) {
-        console.error('[BOT ERROR]', botErr.message);
-    }
 
-    console.log(`[CLAIM] New claim from ${req.user.username}: ${platform} / ${orderId} / ₹${amount}`);
-    res.json({ success: true, message: 'Proof submitted successfully.' });
+        res.json({ success: true, message: 'Proof submitted successfully.' });
+    } catch (err) {
+        next(err);
+    }
 });
+
 
 // Global Error Handler to prevent process crash and return JSON
+// Global Error Handler
 app.use((err, req, res, next) => {
-    console.error('SYSTEM ERROR:', err.stack);
-    res.status(500).json({ error: 'Internal Vault Error: Request failed.' });
+    console.error(`[SYSTEM ERROR] ${new Date().toISOString()}:`, err.stack);
+    // Logic #5: No sensitive database errors leaked
+    res.status(500).json({
+        error: 'An internal server error occurred. Please try again later.',
+        message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
 });
+
 
 process.on('uncaughtException', (err) => {
     console.error('CRITICAL UNCAUGHT ERROR:', err.message);
@@ -828,218 +838,147 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('UNHANDLED REJECTION AT:', promise, 'reason:', reason);
 });
 
-// User: Get MY payout history (Live Ledger)
-app.get('/api/payouts', authenticateToken, (req, res) => {
-    const payouts = db.get('payouts').filter({ userId: req.user.id }).value();
-    res.json(payouts || []);
+// User: Get MY payout history
+app.get('/api/payouts', authenticateToken, async (req, res, next) => {
+    try {
+        const payouts = await Payout.find({ userId: req.user.id }).sort({ requestedAt: -1 });
+        res.json(payouts);
+    } catch (err) { next(err); }
 });
 
-// User: Get MY claim history (Order History)
-app.get('/api/claims', authenticateToken, (req, res) => {
-    const claims = db.get('claims').filter({ userId: req.user.id }).value();
-    res.json(claims || []);
+// User: Get MY claim history
+app.get('/api/claims', authenticateToken, async (req, res, next) => {
+    try {
+        const claims = await Claim.find({ userId: req.user.id }).sort({ submittedAt: -1 });
+        res.json(claims);
+    } catch (err) { next(err); }
 });
+
 
 // =============================================
 // ADMIN: Claims with user trust score + UPI
 // =============================================
-app.get('/api/admin/claims', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') {
-        return res.status(403).json({ error: 'Admin access required' });
-    }
+// ADMIN: Claims with user trust score + UPI
+app.get('/api/admin/claims', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
 
-    // Read FRESH data from DB
-    const allClaims = db.get('claims').value();
-    const allUsers = db.get('users').value();
-
-    // Attach each user's LIVE trustScore and UPI to their claims
-    const enrichedClaims = allClaims.map(claim => {
-        const matchedUser = allUsers.find(u => u.id === claim.userId);
-        return {
-            ...claim,
-            // These two fields come from the USER, not the claim
-            trustScore: matchedUser ? (matchedUser.trustScore || 0) : 0,
-            userUpi: matchedUser && matchedUser.paymentSettings ? (matchedUser.paymentSettings.upi || '') : ''
-        };
-    });
-
-    console.log(`[ADMIN] Claims fetched: ${enrichedClaims.length} (with trust + UPI)`);
-    res.json(enrichedClaims);
+        const claims = await Claim.find({}).lean();
+        const enrichedClaims = await Promise.all(claims.map(async claim => {
+            const user = await User.findById(claim.userId);
+            return {
+                ...claim,
+                trustScore: user?.trustScore || 0,
+                userUpi: user?.paymentSettings?.upi || ''
+            };
+        }));
+        res.json(enrichedClaims);
+    } catch (err) { next(err); }
 });
 
-// =============================================
-// PAYOUT SYSTEM
-// =============================================
-
-
 // Admin: Get all payouts
-app.get('/api/admin/payouts', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
-    const payouts = db.get('payouts').value();
-    res.json(payouts);
+app.get('/api/admin/payouts', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const payouts = await Payout.find({});
+        res.json(payouts);
+    } catch (err) { next(err); }
 });
 
 // Admin: Process Payout
-app.post('/api/admin/payout/complete', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+app.post('/api/admin/payout/complete', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const { payoutId, action } = req.body;
 
-    const { payoutId, action } = req.body;
-    const payout = db.get('payouts').find({ id: payoutId }).value();
+        const payout = await Payout.findById(payoutId);
+        if (!payout) return res.status(404).json({ error: 'Payout not found' });
 
-    if (!payout) return res.status(404).json({ error: 'Payout request not found.' });
-    if (payout.status !== 'pending') return res.status(400).json({ error: 'Payout is already processed.' });
+        payout.status = action;
+        payout.processedAt = new Date();
+        await payout.save();
 
-    db.get('payouts').find({ id: payoutId }).assign({
-        status: action,
-        processedAt: new Date()
-    }).write();
-
-    if (action === 'paid') {
-        const user = db.get('users').find({ id: payout.userId }).value();
-        if (user) {
-            db.get('users').find({ id: payout.userId }).assign({
-                pendingPayout: Math.max(0, (user.pendingPayout || 0) - payout.amount)
-            }).write();
+        if (action === 'paid') {
+            await User.findByIdAndUpdate(payout.userId, {
+                $inc: { pendingPayout: -payout.amount }
+            });
         }
-    }
-
-    res.json({ success: true });
+        res.json({ success: true });
+    } catch (err) { next(err); }
 });
 
-// =============================================
-// ADMIN: User Management
-// =============================================
+// Admin: Get all users
+app.get('/api/admin/users', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
 
-// Admin: Get all users (Sorted by Activity)
-app.get('/api/admin/users', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const users = await User.find({}).lean();
+        const usersWithActivity = await Promise.all(users.map(async u => {
+            const activityCount = await Activity.countDocuments({ userId: u._id });
+            const userClaims = await Claim.find({ userId: u._id });
+            const claimCount = userClaims.length;
+            const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
+            const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
 
-    const allUsers = db.get('users').value();
-    const allActivities = db.get('activities').value();
-    const allClaims = db.get('claims').value();
+            return { ...u, activityCount, claimCount, verifiedCount, activityScore };
+        }));
 
-    const usersWithActivity = allUsers.map(u => {
-        const { password, ...userData } = u;
-
-        const activityCount = allActivities.filter(a => a.userId === u.id).length;
-        const userClaims = allClaims.filter(c => c.userId === u.id);
-        const claimCount = userClaims.length;
-        const verifiedCount = userClaims.filter(c => c.status === 'approved').length;
-        const activityScore = activityCount + (claimCount * 10) + (verifiedCount * 40);
-
-        return {
-            ...userData,
-            activityCount,
-            claimCount,
-            verifiedCount,
-            activityScore
-        };
-    });
-
-    usersWithActivity.sort((a, b) => {
-        if (b.activityScore !== a.activityScore) return (b.activityScore || 0) - (a.activityScore || 0);
-        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return dateB - dateA;
-    });
-
-    console.log(`[ADMIN] Users fetched: ${allUsers.length}`);
-    res.json(usersWithActivity);
+        res.json(usersWithActivity.sort((a, b) => b.activityScore - a.activityScore));
+    } catch (err) { next(err); }
 });
 
-// =============================================
-// ADMIN: Approve / Reject Claims
-// =============================================
+// Admin: Approve Claim
+app.post('/api/admin/approve', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const { claimId, profitAmount } = req.body;
 
-// Admin: Approve Claim — adds profit + increases trust
-app.post('/api/admin/approve', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const claim = await Claim.findByIdAndUpdate(claimId, {
+            status: 'approved',
+            profitAmount: parseFloat(profitAmount),
+            processedAt: new Date()
+        });
+        if (!claim) return res.status(404).json({ error: 'Claim not found' });
 
-    const { claimId, profitAmount } = req.body;
-    if (!claimId || !profitAmount) return res.status(400).json({ error: 'Claim ID and profit amount required.' });
-
-    const claim = db.get('claims').find({ id: claimId }).value();
-    if (!claim) return res.status(404).json({ error: 'Claim not found' });
-
-    // Mark claim as approved
-    db.get('claims').find({ id: claimId }).assign({
-        status: 'approved',
-        profitAmount: parseFloat(profitAmount),
-        processedAt: new Date()
-    }).write();
-
-    // Update user: add profit + increase trust score
-    const user = db.get('users').find({ id: claim.userId }).value();
-    if (user) {
-        const newTrust = (user.trustScore || 0) + 1;
-        db.get('users').find({ id: claim.userId }).assign({
-            totalEarnings: (user.totalEarnings || 0) + parseFloat(profitAmount),
-            pendingPayout: (user.pendingPayout || 0) + parseFloat(profitAmount),
-            trustScore: newTrust
-        }).write();
-        console.log(`[APPROVE] ${user.username}: Trust ${user.trustScore || 0} -> ${newTrust}, +₹${profitAmount}`);
-    }
-
-    res.json({ success: true });
+        await User.findByIdAndUpdate(claim.userId, {
+            $inc: {
+                totalEarnings: parseFloat(profitAmount),
+                pendingPayout: parseFloat(profitAmount),
+                trustScore: 1
+            }
+        });
+        res.json({ success: true });
+    } catch (err) { next(err); }
 });
 
-// Admin: Reject Claim — logs reason + decreases trust
-app.post('/api/admin/reject', authenticateToken, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+// Admin: Reject Claim
+app.post('/api/admin/reject', authenticateToken, async (req, res, next) => {
+    try {
+        if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Admin access required' });
+        const { claimId, reason } = req.body;
 
-    const { claimId, reason } = req.body;
-    if (!claimId) return res.status(400).json({ error: 'Claim ID required.' });
+        const claim = await Claim.findByIdAndUpdate(claimId, {
+            status: 'rejected',
+            rejectReason: reason,
+            processedAt: new Date()
+        });
+        if (!claim) return res.status(404).json({ error: 'Claim not found' });
 
-    const claim = db.get('claims').find({ id: claimId }).value();
-    if (!claim) return res.status(404).json({ error: 'Claim not found' });
-
-    // Mark claim as rejected
-    db.get('claims').find({ id: claimId }).assign({
-        status: 'rejected',
-        rejectReason: reason || 'No reason provided',
-        processedAt: new Date()
-    }).write();
-
-    // Decrease trust score
-    const user = db.get('users').find({ id: claim.userId }).value();
-    if (user) {
-        const newTrust = Math.max(-10, (user.trustScore || 0) - 2);
-        db.get('users').find({ id: claim.userId }).assign({
-            trustScore: newTrust
-        }).write();
-        console.log(`[REJECT] ${user.username}: Trust ${user.trustScore || 0} -> ${newTrust}`);
-    }
-
-    res.json({ success: true });
+        await User.findByIdAndUpdate(claim.userId, { $inc: { trustScore: -2 } });
+        res.json({ success: true });
+    } catch (err) { next(err); }
 });
 
-// =============================================
-// USER SETTINGS — Save UPI (with confirmation)
-// =============================================
-app.post('/api/settings', authenticateToken, (req, res) => {
+// User Settings: Save UPI
+app.post('/api/settings', authenticateToken, async (req, res, next) => {
     const { upi } = req.body;
-
-    if (!upi || !upi.trim()) {
-        return res.status(400).json({ error: 'Valid UPI ID is required.' });
-    }
-
-    const user = db.get('users').find({ id: req.user.id }).value();
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const currentSettings = user.paymentSettings || {};
-    db.get('users')
-        .find({ id: req.user.id })
-        .assign({
-            paymentSettings: { ...currentSettings, upi: upi.trim() }
-        })
-        .write();
-
-    // TELEGRAM NOTIFICATION
-    notifyAdmin(`💳 <b>UPI UPDATED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n🏦 <b>NEW UPI:</b> <code>${upi.trim()}</code>`);
-
-    console.log(`[UPI SAVED] ${req.user.username} -> ${upi.trim()}`);
-    res.json({ success: true, message: 'UPI ID saved and transmitted to Admin.' });
+    try {
+        await User.findByIdAndUpdate(req.user.id, { 'paymentSettings.upi': upi.trim() });
+        notifyAdmin(`💳 <b>UPI UPDATED</b>\n\n👤 <b>USER:</b> ${req.user.username}\n🏦 <b>NEW UPI:</b> <code>${upi.trim()}</code>`);
+        res.json({ success: true });
+    } catch (err) { next(err); }
 });
+
 
 // =============================================
 // ADMIN: Edit User (God Mode)
