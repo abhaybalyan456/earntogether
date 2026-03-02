@@ -311,237 +311,219 @@ bot.onText(/\/search (.+)/, async (msg, match) => {
     }
 });
 
+// --- STATE MANAGE: ANTI-RACE/MULTI-SIGNAL ADMIN SESSIONS ---
+const adminActionState = new Map();
+
+// Helper: Clear state immediately
+const resetState = (chatId) => adminActionState.delete(chatId);
+
+// --- GLOBAL MESSAGE LISTENER FOR STATE HANDLING ---
+bot.on('message', async (msg) => {
+    if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
+    if (msg.text?.startsWith('/')) {
+        resetState(msg.chat.id); // Cancel any active prompt on new command
+        return;
+    }
+
+    const state = adminActionState.get(msg.chat.id);
+    if (!state) return;
+
+    const { action, id, username } = state;
+    const input = msg.text?.trim();
+    if (!input) return;
+
+    try {
+        const freshDb = readDB();
+
+        if (action === 'edit_earnings') {
+            const val = parseFloat(input);
+            if (isNaN(val)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount (Numbers Only).");
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                freshDb.users[uIdx].total_earnings = val;
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>PROFIT UPDATED:</b> ${freshDb.users[uIdx].username} now has ₹${val.toFixed(2)} cumulative.`);
+            }
+        }
+
+        if (action === 'edit_karma') {
+            const val = parseInt(input);
+            if (isNaN(val)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid score (Numbers Only).");
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                freshDb.users[uIdx].trust_score = val;
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>KARMA UPDATED:</b> Score for ${freshDb.users[uIdx].username} is now ${val}`);
+            }
+        }
+
+        if (action === 'rename_user') {
+            const newName = input.toLowerCase();
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                const oldName = freshDb.users[uIdx].username;
+                freshDb.users[uIdx].username = newName;
+                // Sync related records
+                freshDb.claims.forEach(c => { if (c.user_id === id) c.username = newName; });
+                freshDb.payouts.forEach(p => { if (p.user_id === id) p.username = newName; });
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>IDENTITY SYNCED:</b> [${oldName}] is now known as <b>${newName}</b>`);
+            }
+        }
+
+        if (action === 'edit_pending') {
+            const val = parseFloat(input);
+            if (isNaN(val)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                freshDb.users[uIdx].pending_payout = val;
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>BALANCE FIXED:</b> ${freshDb.users[uIdx].username} has ₹${val.toFixed(2)} pending.`);
+            }
+        }
+
+        if (action === 'edit_upi') {
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                freshDb.users[uIdx].upi = input;
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `💳 <b>UPI SYNCED:</b> Account verified with ID [${input}]`);
+            }
+        }
+
+        if (action === 'send_withdraw') {
+            const amountSent = parseFloat(input);
+            if (isNaN(amountSent) || amountSent <= 0) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+            const uIdx = freshDb.users.findIndex(u => u.id === id);
+            if (uIdx !== -1) {
+                const oldBal = parseFloat(freshDb.users[uIdx].pending_payout) || 0;
+                const newBal = Math.max(0, oldBal - amountSent);
+                freshDb.users[uIdx].pending_payout = newBal;
+                freshDb.payouts.push({
+                    id: uuid.v4(), user_id: id, username: freshDb.users[uIdx].username,
+                    amount: amountSent, upi: freshDb.users[uIdx].upi || 'NONE',
+                    status: 'paid', requested_at: new Date().toISOString(),
+                    processed_at: new Date().toISOString(), admin_note: 'BOT_AUTO_SETTLE'
+                });
+                writeDB_Synced(freshDb);
+                bot.sendMessage(ADMIN_CHAT_ID, `🏧 <b>WITHDRAWAL SETTLED:</b>\n👤 <b>${freshDb.users[uIdx].username}</b>\n💰 Total Sent: ₹${amountSent.toFixed(2)}\n⏳ Remaining: ₹${newBal.toFixed(2)}`);
+            }
+        }
+
+        if (action === 'approve_claim') {
+            const profitVal = parseFloat(input);
+            if (isNaN(profitVal)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
+            const cIdx = freshDb.claims.findIndex(c => c.id === id);
+            if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
+                freshDb.claims[cIdx].status = 'approved';
+                freshDb.claims[cIdx].profit_amount = profitVal;
+                freshDb.claims[cIdx].processed_at = new Date().toISOString();
+                const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
+                if (uIdx !== -1) {
+                    freshDb.users[uIdx].total_earnings = (parseFloat(freshDb.users[uIdx].total_earnings) || 0) + profitVal;
+                    freshDb.users[uIdx].pending_payout = (parseFloat(freshDb.users[uIdx].pending_payout) || 0) + profitVal;
+                    freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) + 1;
+                    writeDB_Synced(freshDb);
+                    bot.sendMessage(ADMIN_CHAT_ID, `💎 <b>CLAIM APPROVED:</b> Added ₹${profitVal} to <b>${freshDb.users[uIdx].username}</b>'s vault.`);
+                }
+            }
+        }
+
+        if (action === 'reject_claim') {
+            const cIdx = freshDb.claims.findIndex(c => c.id === id);
+            if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
+                freshDb.claims[cIdx].status = 'rejected';
+                freshDb.claims[cIdx].reject_reason = input;
+                freshDb.claims[cIdx].processed_at = new Date().toISOString();
+                const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
+                if (uIdx !== -1) {
+                    freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) - 2;
+                    writeDB_Synced(freshDb);
+                    bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>CLAIM REJECTED:</b> Reason set as [${input}]`);
+                }
+            }
+        }
+
+        resetState(msg.chat.id); // Wipe state after successful handling
+    } catch (err) {
+        console.error('[STATE ERROR]', err);
+    }
+});
+
 // Handle Callbacks
 bot.on('callback_query', async (query) => {
     const data = query.data;
     const [action, id] = data.split(':');
+    const chatId = query.message.chat.id;
 
     try {
         const db = readDB();
 
         if (action === 'edit_earnings') {
-            bot.sendMessage(ADMIN_CHAT_ID, "📈 <b>Enter Lifetime Profit (₹):</b>", { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newEarn = parseFloat(msg.text);
-                if (isNaN(newEarn)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const freshDb = readDB();
-                const uIdx = freshDb.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    freshDb.users[uIdx].total_earnings = newEarn;
-                    writeDB_Synced(freshDb);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Profit Updated:</b> Cumulative total is now ₹${newEarn.toFixed(2)}`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "📈 <b>Enter Lifetime Profit (₹):</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'edit_karma') {
-            bot.sendMessage(ADMIN_CHAT_ID, "💎 <b>Enter New Karma Score:</b>", { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newKarma = parseInt(msg.text);
-                if (isNaN(newKarma)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid score.");
-                const freshDb = readDB();
-                const uIdx = freshDb.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    freshDb.users[uIdx].trust_score = newKarma;
-                    writeDB_Synced(freshDb);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Karma Updated:</b> New score is ${newKarma}`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'edit_karma') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "💎 <b>Enter New Karma Score:</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'rename_user') {
-            bot.sendMessage(ADMIN_CHAT_ID, "👤 <b>Enter New VAULT IDENTITY (will be normalized):</b>", { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newName = msg.text.trim().toLowerCase();
-                const freshDb = readDB();
-                const uIdx = freshDb.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    freshDb.users[uIdx].username = newName;
-                    freshDb.claims.forEach(c => { if (c.user_id === id) c.username = newName; });
-                    freshDb.payouts.forEach(p => { if (p.user_id === id) p.username = newName; });
-                    writeDB_Synced(freshDb);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>IDENTITY SYNCED:</b> Account is now <b>${newName}</b>`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'rename_user') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "👤 <b>Enter New VAULT IDENTITY:</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'edit_pending') {
-            const user = db.users.find(u => u.id === id);
-            if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
-            bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>EDIT PENDING BALANCE: ${user.username}</b>\n\nCurrent: ₹${(parseFloat(user.pending_payout) || 0).toFixed(2)}\n\n<b>Enter New Balance (₹):</b>`, { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newVal = parseFloat(msg.text);
-                if (isNaN(newVal)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-                const freshDb = readDB();
-                const uIdx = freshDb.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    freshDb.users[uIdx].pending_payout = newVal;
-                    writeDB_Synced(freshDb);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>Balance Updated:</b> ${freshDb.users[uIdx].username} now has ₹${newVal.toFixed(2)} pending.`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'edit_pending') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "💸 <b>Enter New Pending Balance (₹):</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'edit_upi') {
-            const user = db.users.find(u => u.id === id);
-            if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
-            bot.sendMessage(ADMIN_CHAT_ID, `💳 <b>EDIT UPI: ${user.username}</b>\n\nCurrent: <code>${user.upi || 'NONE'}</code>\n\n<b>Enter New UPI ID:</b>`, { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const newUpi = msg.text.trim();
-                const uIdx = db.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    db.users[uIdx].upi = newUpi;
-                    writeDB_Synced(db);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>UPI Updated:</b> ${db.users[uIdx].username} now uses <code>${newUpi}</code>`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'edit_upi') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "💳 <b>Enter New UPI ID:</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'send_withdraw') {
-            const user = db.users.find(u => u.id === id);
-            if (!user) return bot.sendMessage(ADMIN_CHAT_ID, "❌ User not found.");
-            bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>SEND WITHDRAWAL to ${user.username}</b>\n\n<b>Current Pending:</b> ₹${(parseFloat(user.pending_payout) || 0).toFixed(2)}\n<b>UPI:</b> <code>${user.upi || 'NONE'}</code>\n\n<b>Enter Amount to SEND (₹):</b>`, { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const amountSent = parseFloat(msg.text);
-                if (isNaN(amountSent) || amountSent <= 0) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-
-                const freshDb = readDB();
-                const uIdx = freshDb.users.findIndex(u => u.id === id);
-                if (uIdx !== -1) {
-                    const oldBalance = parseFloat(freshDb.users[uIdx].pending_payout) || 0;
-                    const newBalance = Math.max(0, oldBalance - amountSent);
-                    freshDb.users[uIdx].pending_payout = newBalance;
-                    const now = new Date().toISOString();
-                    freshDb.payouts.push({
-                        id: uuid.v4(),
-                        user_id: id,
-                        username: freshDb.users[uIdx].username,
-                        amount: amountSent,
-                        upi: freshDb.users[uIdx].upi || 'NONE',
-                        status: 'paid',
-                        requested_at: now,
-                        processed_at: now,
-                        admin_note: 'APPROVED PAID VIA BOT'
-                    });
-                    writeDB_Synced(freshDb);
-                    bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>WITHDRAWAL SUCCESSFUL:</b>\n👤 User: <b>${freshDb.users[uIdx].username}</b>\n💰 Sent: <b>₹${amountSent.toFixed(2)}</b>\n⏳ Still Pending: ₹${newBalance.toFixed(2)}`);
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'send_withdraw') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "💸 <b>Enter Amount to SEND (₹):</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'approve_claim') {
-            bot.sendMessage(ADMIN_CHAT_ID, "💵 <b>Enter Profit Amount:</b>", { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-                const profit = parseFloat(msg.text);
-                if (isNaN(profit)) return bot.sendMessage(ADMIN_CHAT_ID, "⚠️ Invalid amount.");
-
-                const freshDb = readDB();
-                const cIdx = freshDb.claims.findIndex(c => c.id === id);
-                if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
-                    freshDb.claims[cIdx].status = 'approved';
-                    freshDb.claims[cIdx].profit_amount = profit;
-                    freshDb.claims[cIdx].processed_at = new Date().toISOString();
-                    const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
-                    if (uIdx !== -1) {
-                        freshDb.users[uIdx].total_earnings = (parseFloat(freshDb.users[uIdx].total_earnings) || 0) + profit;
-                        freshDb.users[uIdx].pending_payout = (parseFloat(freshDb.users[uIdx].pending_payout) || 0) + profit;
-                        freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) + 1;
-                        writeDB_Synced(freshDb);
-                        bot.sendMessage(ADMIN_CHAT_ID, `✅ <b>APPROVED:</b> ₹${profit} added to ${freshDb.users[uIdx].username}'s pending withdrawal.`);
-                    }
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'approve_claim') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "💵 <b>Enter Profit Amount for Approval (₹):</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'reject_claim') {
-            bot.sendMessage(ADMIN_CHAT_ID, "📝 <b>Enter reason for rejection:</b>", { parse_mode: 'HTML' });
-            const handler = async (msg) => {
-                if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
-                if (msg.text?.startsWith('/')) return bot.removeListener('message', handler);
-
-                const freshDb = readDB();
-                const cIdx = freshDb.claims.findIndex(c => c.id === id);
-                if (cIdx !== -1 && freshDb.claims[cIdx].status === 'pending') {
-                    freshDb.claims[cIdx].status = 'rejected';
-                    freshDb.claims[cIdx].reject_reason = msg.text;
-                    freshDb.claims[cIdx].processed_at = new Date().toISOString();
-                    const uIdx = freshDb.users.findIndex(u => u.id === freshDb.claims[cIdx].user_id);
-                    if (uIdx !== -1) {
-                        freshDb.users[uIdx].trust_score = (freshDb.users[uIdx].trust_score || 0) - 2;
-                        writeDB_Synced(freshDb);
-                        bot.sendMessage(ADMIN_CHAT_ID, `❌ <b>REJECTED:</b> Notified ${freshDb.users[uIdx].username}`);
-                    }
-                }
-                bot.removeListener('message', handler);
-            };
-            bot.on('message', handler);
+        else if (action === 'reject_claim') {
+            adminActionState.set(chatId, { action, id });
+            bot.sendMessage(chatId, "📝 <b>Enter reason for rejection:</b>", { parse_mode: 'HTML' });
         }
-
-        if (action === 'purge_claims') {
+        else if (action === 'purge_claims') {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.claims = db.claims.filter(c => c.user_id !== id);
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, `💥 <b>PURGE SUCCESS:</b> All claims for ${db.users[uIdx].username} deleted.`);
+                bot.sendMessage(chatId, `💥 <b>PURGE SUCCESS:</b> All claims for ${db.users[uIdx].username} deleted.`);
             }
         }
-
-        if (action === 'purge_history') {
+        else if (action === 'purge_history') {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.payouts = db.payouts.filter(p => p.user_id !== id);
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, `📜 <b>PURGE SUCCESS:</b> Withdrawal history for ${db.users[uIdx].username} deleted.`);
+                bot.sendMessage(chatId, `📜 <b>PURGE SUCCESS:</b> Withdrawal history for ${db.users[uIdx].username} deleted.`);
             }
         }
-
-        if (action === 'purge_profit') {
+        else if (action === 'purge_profit') {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.users[uIdx].total_earnings = 0;
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, `💹 <b>PURGE SUCCESS:</b> Lifetime profit reset for ${db.users[uIdx].username}.`);
+                bot.sendMessage(chatId, `💹 <b>PURGE SUCCESS:</b> Lifetime profit reset for ${db.users[uIdx].username}.`);
             }
         }
-
-        if (action === 'purge_pending') {
+        else if (action === 'purge_pending') {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 db.users[uIdx].pending_payout = 0;
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, `💸 <b>PURGE SUCCESS:</b> Pending withdrawal reset for ${db.users[uIdx].username}.`);
+                bot.sendMessage(chatId, `💸 <b>PURGE SUCCESS:</b> Pending withdrawal reset for ${db.users[uIdx].username}.`);
             }
         }
-
-        if (action === 'delete_user') {
+        else if (action === 'delete_user') {
             const uIdx = db.users.findIndex(u => u.id === id);
             if (uIdx !== -1) {
                 const name = db.users[uIdx].username;
@@ -550,16 +532,15 @@ bot.on('callback_query', async (query) => {
                 db.payouts = db.payouts.filter(p => p.user_id !== id);
                 db.activities = db.activities.filter(a => a.user_id !== id);
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, `☢️ <b>ACCOUNT DESTROYED:</b> <b>${name}</b> and all their data has been erased.`);
+                bot.sendMessage(chatId, `☢️ <b>ACCOUNT DESTROYED:</b> <b>${name}</b> and all their data has been erased.`);
             }
         }
-
-        if (action === 'delete_claim') {
+        else if (action === 'delete_claim') {
             const cIdx = db.claims.findIndex(c => c.id === id);
             if (cIdx !== -1) {
                 db.claims.splice(cIdx, 1);
                 writeDB_Synced(db);
-                bot.sendMessage(ADMIN_CHAT_ID, "🗑 Claim deleted permanently.");
+                bot.sendMessage(chatId, "🗑 Claim deleted permanently.");
             }
         }
 
@@ -569,11 +550,10 @@ bot.on('callback_query', async (query) => {
     }
 });
 
-// RESTORE LOGIC (Re-defined for document handling)
+// RESTORE LOGIC (Improved)
 bot.on('document', async (msg) => {
     if (msg.chat.id.toString() !== ADMIN_CHAT_ID) return;
     if (msg.document.file_name === 'vault_db.json') {
-        bot.sendMessage(ADMIN_CHAT_ID, "⏳ <b>Syncing Vault from Upload...</b>", { parse_mode: 'HTML' });
         try {
             const fileLink = await bot.getFileLink(msg.document.file_id);
             const response = await fetch(fileLink);
@@ -581,9 +561,11 @@ bot.on('document', async (msg) => {
             if (newData.users && newData.claims) {
                 const fs = require('fs');
                 fs.writeFileSync(DB_PATH, JSON.stringify(newData, null, 4));
-                bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>RESTORE SUCCESS!</b> Website synced.");
+                bot.sendMessage(ADMIN_CHAT_ID, "✅ <b>RESTORE SUCCESS!</b> Database synced.");
             }
-        } catch (err) { }
+        } catch (err) {
+            bot.sendMessage(ADMIN_CHAT_ID, "❌ Restore failed: " + err.message);
+        }
     }
 });
 
