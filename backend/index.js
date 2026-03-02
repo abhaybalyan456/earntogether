@@ -595,8 +595,34 @@ const mapUser = (u) => ({
     totalEarnings: parseFloat(u.total_earnings) || 0,
     pendingPayout: parseFloat(u.pending_payout) || 0,
     paymentSettings: { upi: u.upi || '' },
+    is_banned: !!u.is_banned,
     createdAt: u.created_at
 });
+
+// --- GLOBAL ROLE & STATUS MIDDLEWARE ---
+const checkUserStatus = (req, res, next) => {
+    // 1. Hardcoded Admin Bypass
+    if (req.user.username === 'you know whats cool' || req.user.isAdmin) return next();
+
+    const db = readDB();
+    const user = db.users.find(u => u.id === req.user._id);
+
+    // 2. User Existence check
+    if (!user) return res.status(401).json({ error: 'Identity lost. Please login again.' });
+
+    // 3. Ban Enforcement
+    if (user.is_banned) return res.status(403).json({ error: 'Protocol Alert: Your account is permanently locked.' });
+
+    // 4. Maintenance Enforcement
+    if (db.meta.maintenance_mode) return res.status(503).json({ error: 'Vault is currently under maintenance.' });
+
+    next();
+};
+
+const adminOnly = (req, res, next) => {
+    if (req.user.username === 'you know whats cool' || req.user.isAdmin) return next();
+    res.status(403).json({ error: 'Protocol Restriction: Admin Override Required' });
+};
 
 // --- API ROUTES ---
 app.post('/api/register', async (req, res) => {
@@ -665,7 +691,7 @@ app.get('/api/me', authenticateSession, (req, res) => {
     res.json({ ...mapUser(user), meta: db.meta });
 });
 
-app.post('/api/verify/submit', authenticateSession, (req, res) => {
+app.post('/api/verify/submit', authenticateSession, checkUserStatus, (req, res) => {
     const { platform, orderId, amount, date, proofImage } = req.body;
     const db = readDB();
     const claim = { id: uuid.v4(), user_id: req.user._id, username: req.user.username, platform, order_id: orderId, amount: parseFloat(amount), purchase_date: date, proof_image: proofImage, status: 'pending', submitted_at: new Date().toISOString() };
@@ -681,17 +707,17 @@ app.post('/api/verify/submit', authenticateSession, (req, res) => {
     res.json({ success: true });
 });
 
-app.get('/api/claims', authenticateSession, (req, res) => {
+app.get('/api/claims', authenticateSession, checkUserStatus, (req, res) => {
     const db = readDB();
     res.json(db.claims.filter(c => c.user_id === req.user._id).map(c => ({ ...c, _id: c.id })));
 });
 
-app.get('/api/payouts', authenticateSession, (req, res) => {
+app.get('/api/payouts', authenticateSession, checkUserStatus, (req, res) => {
     const db = readDB();
     res.json(db.payouts.filter(p => p.user_id === req.user._id).map(p => ({ ...p, _id: p.id })));
 });
 
-app.post('/api/settings', authenticateSession, (req, res) => {
+app.post('/api/settings', authenticateSession, checkUserStatus, (req, res) => {
     const { upi } = req.body;
     const db = readDB();
     const uIdx = db.users.findIndex(u => u.id === req.user._id);
@@ -703,7 +729,7 @@ app.post('/api/settings', authenticateSession, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/activity', authenticateSession, (req, res) => {
+app.post('/api/activity', authenticateSession, checkUserStatus, (req, res) => {
     const { action, platform, link } = req.body;
     const db = readDB();
     db.activities.push({ id: uuid.v4(), user_id: req.user._id, username: req.user.username, action, platform, link, created_at: new Date().toISOString() });
@@ -711,8 +737,7 @@ app.post('/api/activity', authenticateSession, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/admin/broadcast', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.post('/api/admin/broadcast', authenticateSession, adminOnly, (req, res) => {
     const { message } = req.body;
     const db = readDB();
     db.meta.announcement = message;
@@ -720,8 +745,7 @@ app.post('/api/admin/broadcast', authenticateSession, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/admin/maintenance', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.post('/api/admin/maintenance', authenticateSession, adminOnly, (req, res) => {
     const { enabled } = req.body;
     const db = readDB();
     db.meta.maintenance_mode = enabled;
@@ -729,8 +753,7 @@ app.post('/api/admin/maintenance', authenticateSession, (req, res) => {
     res.json({ success: true, enabled: db.meta.maintenance_mode });
 });
 
-app.post('/api/admin/user/ban', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.post('/api/admin/user/ban', authenticateSession, adminOnly, (req, res) => {
     const { userId, banned } = req.body;
     const db = readDB();
     const uIdx = db.users.findIndex(u => u.id === userId);
@@ -740,8 +763,8 @@ app.post('/api/admin/user/ban', authenticateSession, (req, res) => {
     }
     res.json({ success: true });
 });
-app.get('/api/admin/stats', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+
+app.get('/api/admin/stats', authenticateSession, adminOnly, (req, res) => {
     const db = readDB();
     const totalPending = db.users.reduce((sum, u) => sum + (parseFloat(u.pending_payout) || 0), 0);
     const usersToPay = db.users.filter(u => (parseFloat(u.pending_payout) || 0) > 0).length;
@@ -767,8 +790,7 @@ app.get('/api/admin/stats', authenticateSession, (req, res) => {
     });
 });
 
-app.get('/api/admin/users', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.get('/api/admin/users', authenticateSession, adminOnly, (req, res) => {
     const db = readDB();
     res.json(db.users.map(u => ({
         ...mapUser(u),
@@ -779,8 +801,7 @@ app.get('/api/admin/users', authenticateSession, (req, res) => {
     })));
 });
 
-app.get('/api/admin/claims', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.get('/api/admin/claims', authenticateSession, adminOnly, (req, res) => {
     const db = readDB();
     res.json(db.claims.map(c => {
         const user = db.users.find(u => u.id === c.user_id);
@@ -788,8 +809,7 @@ app.get('/api/admin/claims', authenticateSession, (req, res) => {
     }).reverse());
 });
 
-app.post('/api/admin/approve', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.post('/api/admin/approve', authenticateSession, adminOnly, (req, res) => {
     const { claimId, profitAmount } = req.body;
     const db = readDB();
     const cIdx = db.claims.findIndex(c => c.id === claimId);
@@ -809,8 +829,7 @@ app.post('/api/admin/approve', authenticateSession, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/admin/reject', authenticateSession, (req, res) => {
-    if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
+app.post('/api/admin/reject', authenticateSession, adminOnly, (req, res) => {
     const { claimId, reason } = req.body;
     const db = readDB();
     const cIdx = db.claims.findIndex(c => c.id === claimId);
