@@ -307,7 +307,10 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
           <Zap size={32} color="#fbbf24" style={{ marginBottom: '1.5rem' }} />
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 800, textTransform: 'uppercase' }}>Pending Withdrawal</div>
           <div style={{ fontSize: '3.5rem', fontWeight: 800 }}>₹{(user.pendingPayout || 0).toFixed(2)}</div>
-          <p style={{ fontSize: '0.9rem', marginTop: '1rem', color: 'var(--gold)', fontWeight: 800 }}>Estimated: 7 - 90 Days</p>
+          <div style={{ marginTop: '1.5rem', padding: '0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid var(--gold-muted)', borderRadius: '0.5rem' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--gold)', fontWeight: 900, marginBottom: '0.2rem' }}>MINIMUM WITHDRAWAL: ₹500</p>
+            <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Protocol: You will be paid instantly once your balance reaches the ₹500 threshold.</p>
+          </div>
         </div>
 
         <button
@@ -501,9 +504,13 @@ const UserDashboard = ({ user, onUpdateSettings, onRefresh, onBack, onAdmin, pla
         </div>
 
         <div className="settings-panel">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '3rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
             <Landmark size={28} color="var(--gold)" />
             <h3 style={{ fontSize: '2rem' }}>Withdrawal History</h3>
+          </div>
+          <div style={{ marginBottom: '2rem', padding: '1rem', background: 'rgba(234, 179, 8, 0.05)', borderRadius: '10px', borderLeft: '3px solid var(--gold)' }}>
+            <p style={{ fontSize: '0.8rem', color: 'var(--gold)', fontWeight: 800 }}>MINIMUM PAYOUT THRESHOLD: ₹500</p>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Withdrawals are autostarted and processed instantly once your cumulative pending balance reaches ₹500.</p>
           </div>
 
           <div style={{ overflowX: 'auto' }}>
