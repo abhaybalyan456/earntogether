@@ -55,7 +55,7 @@ const AdminPanel = ({ onBack }) => {
             if (res.ok) {
                 const fresh = await res.json();
                 setUsers(fresh);
-                setEditingUser(fresh.find(u => u.id === user.id) || user);
+                setEditingUser(fresh.find(u => u._id === user._id) || user);
             } else setEditingUser(user);
         } catch { setEditingUser(user); }
         setLoading(false);
@@ -65,7 +65,7 @@ const AdminPanel = ({ onBack }) => {
         e.preventDefault();
         const res = await fetch(`${API_BASE}/admin/user/update`, {
             method: 'POST', headers,
-            body: JSON.stringify({ userId: editingUser.id, updates: editingUser })
+            body: JSON.stringify({ userId: editingUser._id, updates: editingUser })
         });
         if (res.ok) { setEditingUser(null); fetchData(); showNotif('User updated successfully'); }
         else { const d = await res.json(); showNotif(d.error || 'Update failed', 'error'); }
@@ -201,7 +201,7 @@ const AdminPanel = ({ onBack }) => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {filteredUsers.map(u => (
-                    <div key={u.id} className="admin-user-card">
+                    <div key={u._id} className="admin-user-card">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.8rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minWidth: 0 }}>
                                 <div style={{ padding: '0.4rem', background: 'rgba(255,255,255,0.03)', borderRadius: '50%', flexShrink: 0 }}><User size={16} color="var(--gold)" /></div>
@@ -228,19 +228,19 @@ const AdminPanel = ({ onBack }) => {
 
                         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                             <button className="admin-action-btn" onClick={() => manageUser(u)}>✏️ Edit</button>
-                            <button className="admin-action-btn success" onClick={() => setActionModal({ action: 'send-withdraw', userId: u.id, username: u.username })}>💸 Send Pay</button>
-                            <button className="admin-action-btn" onClick={() => setActionModal({ action: 'reset-password', userId: u.id, username: u.username })}>🔑 Password</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-claims', userId: u.id, username: u.username })}>🗑 Claims</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-history', userId: u.id, username: u.username })}>📜 History</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-profit', userId: u.id, username: u.username })}>💹 Profit</button>
-                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-pending', userId: u.id, username: u.username })}>💸 Pending</button>
-                            <button className="admin-action-btn danger" onClick={() => handleDeleteUser(u.id)}>☢️ Delete</button>
-                            <button className="admin-action-btn" onClick={() => loadUserDetail(u.id)}>
-                                {expandedUser === u.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />} Detail
+                            <button className="admin-action-btn success" onClick={() => setActionModal({ action: 'send-withdraw', userId: u._id, username: u.username })}>💸 Send Pay</button>
+                            <button className="admin-action-btn" onClick={() => setActionModal({ action: 'reset-password', userId: u._id, username: u.username })}>🔑 Password</button>
+                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-claims', userId: u._id, username: u.username })}>🗑 Claims</button>
+                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-history', userId: u._id, username: u.username })}>📜 History</button>
+                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-profit', userId: u._id, username: u.username })}>💹 Profit</button>
+                            <button className="admin-action-btn danger" onClick={() => setActionModal({ action: 'purge-pending', userId: u._id, username: u.username })}>💸 Pending</button>
+                            <button className="admin-action-btn danger" onClick={() => handleDeleteUser(u._id)}>☢️ Delete</button>
+                            <button className="admin-action-btn" onClick={() => loadUserDetail(u._id)}>
+                                {expandedUser === u._id ? <ChevronUp size={12} /> : <ChevronDown size={12} />} Detail
                             </button>
                         </div>
 
-                        {expandedUser === u.id && (
+                        {expandedUser === u._id && (
                             <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '1rem', fontSize: '0.75rem' }}>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '0.5rem' }}>
                                     <span>UPI: <code style={{ color: 'var(--emerald)' }}>{u.paymentSettings?.upi || 'NONE'}</code></span>
@@ -253,7 +253,7 @@ const AdminPanel = ({ onBack }) => {
                                     <div style={{ marginTop: '0.5rem' }}>
                                         <strong style={{ color: 'var(--gold)', fontSize: '0.6rem' }}>RECENT CLAIMS:</strong>
                                         {userClaims.slice(-3).reverse().map(c => (
-                                            <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', borderBottom: '1px solid var(--glass-border)', flexWrap: 'wrap', gap: '0.3rem' }}>
+                                            <div key={c._id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', borderBottom: '1px solid var(--glass-border)', flexWrap: 'wrap', gap: '0.3rem' }}>
                                                 <span>{c.platform} - {c.orderId}</span>
                                                 <span style={{ color: c.status === 'approved' ? 'var(--emerald)' : c.status === 'rejected' ? 'var(--ruby)' : 'var(--gold)' }}>{c.status}</span>
                                             </div>
@@ -278,7 +278,7 @@ const AdminPanel = ({ onBack }) => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {claims.map(c => (
-                    <div key={c.id} className="admin-user-card">
+                    <div key={c._id} className="admin-user-card">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.8rem' }}>
                             <div style={{ minWidth: 0, flex: 1 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -301,20 +301,20 @@ const AdminPanel = ({ onBack }) => {
                             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                 {c.proofImage && <button className="admin-action-btn" onClick={() => setViewProof(c.proofImage)}><Eye size={12} /> View</button>}
                                 {c.status === 'pending' && (
-                                    procClaim === c.id ? (
+                                    procClaim === c._id ? (
                                         <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
                                             <input className="lux-input" style={{ width: '80px', padding: '0.4rem', fontSize: '0.75rem' }} placeholder="₹" type="number" value={profit} onChange={e => setProfit(e.target.value)} />
-                                            <button className="admin-action-btn success" onClick={() => approveClaim(c.id)}><Check size={12} /></button>
+                                            <button className="admin-action-btn success" onClick={() => approveClaim(c._id)}><Check size={12} /></button>
                                             <button className="admin-action-btn" onClick={() => setProcClaim(null)}><X size={12} /></button>
                                         </div>
                                     ) : (
                                         <>
-                                            <button className="admin-action-btn success" onClick={() => setProcClaim(c.id)}>✅ Approve</button>
-                                            <button className="admin-action-btn danger" onClick={() => rejectClaim(c.id)}>❌ Reject</button>
+                                            <button className="admin-action-btn success" onClick={() => setProcClaim(c._id)}>✅ Approve</button>
+                                            <button className="admin-action-btn danger" onClick={() => rejectClaim(c._id)}>❌ Reject</button>
                                         </>
                                     )
                                 )}
-                                <button className="admin-action-btn danger" onClick={() => deleteClaim(c.id)}>🗑</button>
+                                <button className="admin-action-btn danger" onClick={() => deleteClaim(c._id)}>🗑</button>
                             </div>
                         </div>
                     </div>
@@ -427,7 +427,7 @@ const AdminPanel = ({ onBack }) => {
                                     </div>
                                 </div>
                                 <button type="submit" className="lux-btn-gold" style={{ width: '100%', padding: '1rem' }}>SAVE</button>
-                                <button type="button" onClick={() => handleDeleteUser(editingUser.id)} className="lux-btn-ghost" style={{ width: '100%', borderColor: 'var(--ruby)', color: 'var(--ruby)' }}>DELETE ACCOUNT</button>
+                                <button type="button" onClick={() => handleDeleteUser(editingUser._id)} className="lux-btn-ghost" style={{ width: '100%', borderColor: 'var(--ruby)', color: 'var(--ruby)' }}>DELETE ACCOUNT</button>
                             </form>
                         </motion.div>
                     </motion.div>

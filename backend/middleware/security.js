@@ -1,6 +1,5 @@
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const jwt = require('jsonwebtoken');
 
@@ -13,6 +12,22 @@ const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 5, // 5 attempts per IP
     message: { error: 'Too many login attempts. Please try again after 15 minutes.' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' }
+});
+
+const submissionLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 15,
+    message: { error: 'Spam Protection: Maximum 15 claims per hour allowed.' },
     standardHeaders: true,
     legacyHeaders: false
 });
@@ -79,6 +94,8 @@ const setSecureCookie = (res, token) => {
 
 module.exports = {
     loginLimiter,
+    apiLimiter,
+    submissionLimiter,
     sanitizeMiddleware,
     authenticateSession,
     setSecureCookie,
@@ -96,6 +113,5 @@ module.exports = {
             },
         },
         xFrameOptions: { action: "deny" } // Prevent Clickjacking
-    }),
-    nosqlSanitize: mongoSanitize()
+    })
 };
