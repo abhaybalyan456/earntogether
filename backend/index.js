@@ -8,6 +8,16 @@ const { readDB, writeDB, DB_PATH } = require('./db');
 const TelegramBot = require('node-telegram-bot-api');
 const uuid = require('uuid');
 
+// --- CRASH HANDLERS: Node Process Level Protection ---
+process.on('uncaughtException', (error) => {
+    console.error('🔥 [CRITICAL] Uncaught Exception:', error.message);
+    console.error(error.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥 [CRITICAL] Unhandled Promise Rejection:', reason);
+});
+
 const app = express();
 const cookieParser = require('cookie-parser');
 const {
@@ -570,15 +580,22 @@ bot.on('document', async (msg) => {
 });
 
 // --- DATA NORMALIZERS ---
+// --- DATA NORMALIZERS ---
+const safeDate = (dateStr) => {
+    if (!dateStr) return new Date().toISOString();
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+};
+
 const mapUser = (u) => ({
     _id: u.id,
     username: u.username,
-    trustScore: u.trust_score,
+    trustScore: u.trust_score || 0,
     totalEarnings: parseFloat(u.total_earnings) || 0,
     pendingPayout: parseFloat(u.pending_payout) || 0,
     paymentSettings: { upi: u.upi || '' },
     isBanned: !!u.is_banned,
-    createdAt: u.created_at
+    createdAt: safeDate(u.created_at)
 });
 
 const mapClaim = (c) => ({
@@ -588,13 +605,25 @@ const mapClaim = (c) => ({
     platform: c.platform,
     orderId: c.orderId || c.order_id,
     amount: parseFloat(c.amount) || 0,
-    purchaseDate: c.purchaseDate || c.purchase_date,
+    purchaseDate: safeDate(c.purchaseDate || c.purchase_date),
     proofImage: c.proofImage || c.proof_image,
-    status: c.status,
-    submittedAt: c.submittedAt || c.submitted_at,
+    status: c.status || 'pending',
+    submittedAt: safeDate(c.submittedAt || c.submitted_at),
     profitAmount: parseFloat(c.profitAmount || c.profit_amount) || 0,
-    processedAt: c.processedAt || c.processed_at,
-    rejectReason: c.rejectReason || c.reject_reason
+    processedAt: (c.processedAt || c.processed_at) ? safeDate(c.processedAt || c.processed_at) : null,
+    rejectReason: c.rejectReason || c.reject_reason || ''
+});
+
+const mapPayout = (p) => ({
+    _id: p.id,
+    user_id: p.user_id,
+    username: p.username,
+    amount: parseFloat(p.amount) || 0,
+    upi: p.upi,
+    status: p.status,
+    requestedAt: safeDate(p.requestedAt || p.requested_at),
+    processedAt: (p.processedAt || p.processed_at) ? safeDate(p.processedAt || p.processed_at) : null,
+    adminNote: p.adminNote || p.admin_note || ''
 });
 
 // --- GLOBAL ROLE & STATUS MIDDLEWARE ---
@@ -1022,7 +1051,7 @@ app.get('/api/admin/user/:userId/payouts', authenticateSession, (req, res) => {
     if (req.user.username !== 'you know whats cool') return res.status(403).json({ error: 'Access denied' });
     const { userId } = req.params;
     const db = readDB();
-    res.json(db.payouts.filter(p => p.user_id === userId).map(p => ({ ...p, _id: p.id })));
+    res.json(db.payouts.filter(p => p.user_id === userId).map(mapPayout).reverse());
 });
 
 // --- API 404 FALLBACK: MATCH ALL UNMATCHED /api ROUTE ---
