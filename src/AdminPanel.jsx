@@ -230,12 +230,14 @@ const AdminPanel = ({ onBack }) => {
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1.5rem' }}>
                     {cards.map((c, i) => (
-                        <div key={i} className="admin-stat-card">
-                            <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', letterSpacing: '0.15em', marginBottom: '0.5rem' }}>{c.label}</div>
-                            <div style={{ fontSize: '1.4rem', fontWeight: 900, color: c.color }}>{c.value}</div>
-                        </div>
+                        <motion.div key={i} whileHover={{ translateY: -5, scale: 1.02 }} className="admin-stat-card" style={{ background: 'linear-gradient(145deg, rgba(15,18,24,0.9), rgba(5,7,10,0.95))', border: `1px solid ${c.color.replace(')', ', 0.2)').replace('var(--', 'rgba(var(--')}`, boxShadow: `0 10px 30px ${c.color.replace(')', ', 0.05)').replace('var(--', 'rgba(var(--')}` }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', letterSpacing: '0.15em', marginBottom: '0.8rem', textTransform: 'uppercase', opacity: 0.8 }}>{c.label}</div>
+                                <div style={{ fontSize: '1.8rem', fontWeight: 900, color: c.color, textShadow: `0 0 20px ${c.color.replace(')', ', 0.3)').replace('var(--', 'rgba(var(--')}` }}>{c.value}</div>
+                            </div>
+                        </motion.div>
                     ))}
                 </div>
             </div>
@@ -248,13 +250,13 @@ const AdminPanel = ({ onBack }) => {
             <div style={{ marginBottom: '1.5rem' }}>
                 <input className="admin-search-input" placeholder="Search users by name..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {filteredUsers.map(u => (
-                    <div key={u._id} className="admin-user-card" style={{ opacity: u.isBanned ? 0.5 : 1, borderLeft: u.isBanned ? '4px solid var(--ruby)' : '' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.8rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minWidth: 0 }}>
-                                <div style={{ padding: '0.4rem', background: 'rgba(255,255,255,0.03)', borderRadius: '50%', flexShrink: 0 }}>
-                                    {u.isBanned ? <AlertCircle size={16} color="var(--ruby)" /> : <User size={16} color="var(--gold)" />}
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={u._id} className="admin-user-card" style={{ opacity: u.isBanned ? 0.6 : 1, borderLeft: u.isBanned ? '4px solid var(--ruby)' : '4px solid transparent', background: 'linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)', boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.2rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1.2rem', minWidth: 0, flex: 1 }}>
+                                <div style={{ padding: '0.8rem', background: u.isBanned ? 'rgba(239,68,68,0.1)' : 'rgba(234,179,8,0.1)', borderRadius: '50%', flexShrink: 0, boxShadow: `0 0 20px ${u.isBanned ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.2)'}` }}>
+                                    {u.isBanned ? <AlertCircle size={24} color="var(--ruby)" /> : <User size={24} color="var(--gold)" />}
                                 </div>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ fontWeight: 800, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -280,9 +282,9 @@ const AdminPanel = ({ onBack }) => {
                             </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-                            <button className="admin-action-btn" onClick={() => manageUser(u)}>✏️ Edit</button>
-                            <button className="admin-action-btn success" onClick={() => setActionModal({ action: 'send-withdraw', userId: u._id, username: u.username })}>💸 Send Pay</button>
+                        <div style={{ display: 'flex', gap: '0.8rem', marginTop: '1.5rem', flexWrap: 'wrap', paddingTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                            <button className="admin-action-btn lux-btn-ghost" style={{ padding: '0.5rem 1rem' }} onClick={() => manageUser(u)}>✏️ EDIT INFO</button>
+                            <button className="admin-action-btn success" style={{ padding: '0.5rem 1rem' }} onClick={() => setActionModal({ action: 'send-withdraw', userId: u._id, username: u.username })}>💸 SEND PAY</button>
                             <button className={`admin-action-btn ${u.isBanned ? 'success' : 'danger'}`} onClick={() => handleBanUser(u._id, !u.isBanned)}>
                                 {u.isBanned ? '🛡 Unban' : '🚫 Ban'}
                             </button>
@@ -316,7 +318,7 @@ const AdminPanel = ({ onBack }) => {
                                 )}
                             </div>
                         )}
-                    </div>
+                    </motion.div>
                 ))}
                 {filteredUsers.length === 0 && <p style={{ textAlign: 'center', padding: '2rem', opacity: 0.4 }}>No users found</p>}
             </div>
@@ -330,19 +332,19 @@ const AdminPanel = ({ onBack }) => {
                 <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>{claims.length} total claims</div>
                 <button className="admin-action-btn danger" onClick={purgeAllClaims}>☢️ Purge All Claims</button>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 {claims.map(c => (
-                    <div key={c._id} className="admin-user-card">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.8rem' }}>
+                    <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} key={c._id} className="admin-user-card" style={{ background: c.status === 'pending' ? 'linear-gradient(135deg, rgba(234,179,8,0.05) 0%, rgba(0,0,0,0) 100%)' : 'rgba(255,255,255,0.02)', border: c.status === 'pending' ? '1px solid rgba(234,179,8,0.3)' : '1px solid var(--glass-border)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
                             <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <span style={{ fontWeight: 800 }}>{c.username}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                                    <span style={{ fontWeight: 900, fontSize: '1.1rem', letterSpacing: '0.02em', color: '#fff' }}>{c.username}</span>
                                     <span style={{
-                                        fontSize: '0.6rem', padding: '0.2rem 0.5rem', borderRadius: '100px', fontWeight: 800,
-                                        background: c.status === 'pending' ? 'rgba(234,179,8,0.1)' : c.status === 'approved' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-                                        color: c.status === 'pending' ? 'var(--gold)' : c.status === 'approved' ? 'var(--emerald)' : 'var(--ruby)'
+                                        fontSize: '0.65rem', padding: '0.3rem 0.8rem', borderRadius: '100px', fontWeight: 900, letterSpacing: '0.1em',
+                                        background: c.status === 'pending' ? 'rgba(234,179,8,0.15)' : c.status === 'approved' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                                        color: c.status === 'pending' ? 'var(--gold)' : c.status === 'approved' ? 'var(--emerald)' : 'var(--ruby)', boxShadow: `0 0 15px ${c.status === 'pending' ? 'rgba(234,179,8,0.2)' : c.status === 'approved' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`
                                     }}>{c.status.toUpperCase()}</span>
-                                    <span style={{ fontSize: '0.55rem', opacity: 0.4 }}>Karma: {c.trustScore || 0}</span>
+                                    <span style={{ fontSize: '0.65rem', opacity: 0.5, display: 'flex', alignItems: 'center', gap: '4px' }}><Award size={10} color="var(--gold)" /> KARMA: {c.trustScore || 0}</span>
                                 </div>
                                 <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', flexWrap: 'wrap', fontSize: '0.75rem' }}>
                                     <span style={{ color: 'var(--gold)', fontWeight: 800 }}>{c.platform}</span>
@@ -352,26 +354,26 @@ const AdminPanel = ({ onBack }) => {
                                 </div>
                                 {c.userUpi && <div style={{ fontSize: '0.65rem', marginTop: '0.3rem', color: 'var(--emerald)' }}>UPI: {c.userUpi}</div>}
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                {c.proofImage && <button className="admin-action-btn" onClick={() => setViewProof(c.proofImage)}><Eye size={12} /> View</button>}
+                            <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignSelf: 'center' }}>
+                                {c.proofImage && <button className="admin-action-btn" style={{ padding: '0.6rem 1rem' }} onClick={() => setViewProof(c.proofImage)}><Eye size={14} /> VIEW PROOF</button>}
                                 {c.status === 'pending' && (
                                     procClaim === c._id ? (
-                                        <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
-                                            <input className="lux-input" style={{ width: '80px', padding: '0.4rem', fontSize: '0.75rem' }} placeholder="₹" type="number" value={profit} onChange={e => setProfit(e.target.value)} />
-                                            <button className="admin-action-btn success" onClick={() => approveClaim(c._id)}><Check size={12} /></button>
-                                            <button className="admin-action-btn" onClick={() => setProcClaim(null)}><X size={12} /></button>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '0.5rem', borderRadius: '0.8rem', border: '1px solid var(--glass-border)' }}>
+                                            <input className="lux-input" style={{ width: '100px', padding: '0.6rem', fontSize: '0.85rem' }} placeholder="PROFIT ₹" type="number" value={profit} onChange={e => setProfit(e.target.value)} />
+                                            <button className="admin-action-btn success" style={{ padding: '0.7rem' }} onClick={() => approveClaim(c._id)}><Check size={16} /></button>
+                                            <button className="admin-action-btn danger" style={{ padding: '0.7rem' }} onClick={() => setProcClaim(null)}><X size={16} /></button>
                                         </div>
                                     ) : (
                                         <>
-                                            <button className="admin-action-btn success" onClick={() => setProcClaim(c._id)}>✅ Approve</button>
-                                            <button className="admin-action-btn danger" onClick={() => rejectClaim(c._id)}>❌ Reject</button>
+                                            <button className="admin-action-btn success" style={{ padding: '0.6rem 1rem' }} onClick={() => setProcClaim(c._id)}><Check size={14} /> APPROVE</button>
+                                            <button className="admin-action-btn danger" style={{ padding: '0.6rem 1rem' }} onClick={() => rejectClaim(c._id)}><X size={14} /> REJECT</button>
                                         </>
                                     )
                                 )}
-                                <button className="admin-action-btn danger" onClick={() => deleteClaim(c._id)}>🗑</button>
+                                <button className="admin-action-btn" style={{ padding: '0.6rem 1rem', opacity: 0.6 }} onClick={() => deleteClaim(c._id)}><Trash2 size={14} /></button>
                             </div>
                         </div>
-                    </div>
+                    </motion.div>
                 ))}
                 {claims.length === 0 && <p style={{ textAlign: 'center', padding: '2rem', opacity: 0.4 }}>No claims found</p>}
             </div>
@@ -436,29 +438,29 @@ const AdminPanel = ({ onBack }) => {
             </AnimatePresence>
 
             {/* Header */}
-            <div style={{ marginBottom: '2rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div style={{ marginBottom: '3rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '2rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '2rem' }}>
                     <div>
-                        <h2 style={{ fontSize: 'clamp(1.5rem, 5vw, 3rem)' }} className="gold-gradient">Admin Command Center</h2>
-                        <div style={{ fontSize: '0.5rem', opacity: 0.4, marginTop: '4px', letterSpacing: '0.1em' }}>SYNC: {new Date().toLocaleTimeString()}</div>
+                        <h2 style={{ fontSize: 'clamp(2rem, 5vw, 3.5rem)', textShadow: '0 0 40px rgba(234,179,8,0.2)' }} className="gold-gradient">TELEGRAM COMMAND CENTER</h2>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--emerald)', marginTop: '8px', letterSpacing: '0.2em', fontWeight: 800 }}>LIVE SYNC: {new Date().toLocaleTimeString()}</div>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <button onClick={fetchData} className="admin-action-btn success"><RotateCw size={14} /> Sync</button>
-                        <button onClick={onBack} className="admin-action-btn">← Close</button>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <button onClick={fetchData} className="lux-btn-ghost" style={{ borderColor: 'var(--emerald)', color: 'var(--emerald)', padding: '0.8rem 2rem' }}><RotateCw size={16} style={{ marginRight: '8px' }} /> REFRESH DB</button>
+                        <button onClick={onBack} className="lux-btn-ghost" style={{ padding: '0.8rem 2rem' }}>← EXIT MATRIX</button>
                     </div>
                 </div>
 
                 {/* Tabs */}
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.3)', padding: '0.5rem', borderRadius: '1.5rem', width: 'max-content', maxWidth: '100%', border: '1px solid var(--glass-border)' }}>
                     {[
-                        { id: 'stats', label: 'Stats', icon: <BarChart3 size={14} /> },
-                        { id: 'users', label: `Users (${users.length})`, icon: <Users size={14} /> },
-                        { id: 'claims', label: `Claims (${pendingClaimsCount})`, icon: <FileText size={14} /> },
-                        { id: 'payouts', label: `Payouts`, icon: <Wallet size={14} /> },
+                        { id: 'stats', label: 'NETWORK STATS', icon: <BarChart3 size={16} /> },
+                        { id: 'users', label: `USER DB (${users.length})`, icon: <Users size={16} /> },
+                        { id: 'claims', label: `PENDING CLAIMS (${pendingClaimsCount})`, icon: <FileText size={16} /> },
+                        { id: 'payouts', label: `PAYOUT QUEUE`, icon: <Wallet size={16} /> },
                     ].map(tab => (
                         <button key={tab.id} onClick={() => setAdminTab(tab.id)}
-                            className={adminTab === tab.id ? 'lux-btn-gold' : 'lux-btn-ghost'}
-                            style={{ padding: '0.6rem 1.2rem', fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            className={adminTab === tab.id ? 'lux-btn-gold' : 'nav-link'}
+                            style={adminTab !== tab.id ? { padding: '1rem 1.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem', color: '#fff', background: 'transparent', border: 'none', cursor: 'pointer', fontWeight: 800, letterSpacing: '0.1em' } : { padding: '1rem 1.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.6rem', borderRadius: '1rem' }}>
                             {tab.icon} {tab.label}
                         </button>
                     ))}
