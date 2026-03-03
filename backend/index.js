@@ -707,13 +707,35 @@ app.post('/api/verify/submit', authenticateSession, checkUserStatus, (req, res) 
     };
     db.claims.push(claim);
     writeDB_Synced(db);
-    notifyAdmin(`🔔 <b>NEW CLAIM REGISTERED:</b>\n\n` +
+    const caption = `🔔 <b>NEW CLAIM REGISTERED:</b>\n\n` +
         `👤 <b>User:</b> ${req.user.username}\n` +
         `🏢 <b>Platform:</b> ${platform.toUpperCase()}\n` +
         `📦 <b>Order ID:</b> <code>${orderId}</code>\n` +
         `💰 <b>Profit Value:</b> ₹${amount}\n` +
         `📅 <b>Purchase Date:</b> ${date}\n\n` +
-        `<i>Use /claims to approve/reject now!</i>`);
+        `<i>Use /claims to approve/reject now!</i>`;
+
+    if (proofImage) {
+        try {
+            const matches = proofImage.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+            if (matches && matches.length === 3) {
+                const buffer = Buffer.from(matches[2], 'base64');
+                const contentType = matches[1];
+                if (contentType.includes('pdf')) {
+                    bot.sendDocument(ADMIN_CHAT_ID, buffer, { caption, parse_mode: 'HTML' }, { filename: 'proof.pdf', contentType });
+                } else {
+                    bot.sendPhoto(ADMIN_CHAT_ID, buffer, { caption, parse_mode: 'HTML' }, { filename: 'proof.jpg', contentType });
+                }
+            } else {
+                notifyAdmin(caption);
+            }
+        } catch (e) {
+            notifyAdmin(caption);
+        }
+    } else {
+        notifyAdmin(caption);
+    }
+
     res.json({ success: true });
 });
 

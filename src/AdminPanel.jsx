@@ -378,6 +378,45 @@ const AdminPanel = ({ onBack }) => {
         </div>
     );
 
+    // === PAYOUTS TAB ===
+    const renderPayouts = () => {
+        const payables = users.filter(u => (parseFloat(u.pendingPayout) || 0) > 0);
+        return (
+            <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>{payables.length} users waiting for payout</div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {payables.map(u => (
+                        <div key={u._id} className="admin-user-card" style={{ borderLeft: '4px solid var(--gold)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.8rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <div style={{ padding: '0.5rem', background: 'rgba(234,179,8,0.1)', borderRadius: '50%' }}>
+                                        <Wallet size={20} color="var(--gold)" />
+                                    </div>
+                                    <div>
+                                        <div style={{ fontWeight: 800, fontSize: '1rem' }}>{u.username}</div>
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--emerald)', marginTop: '0.2rem' }}>UPI: <code>{u.paymentSettings?.upi || 'NONE'}</code></div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 900, color: 'var(--gold)' }}>₹{(u.pendingPayout || 0).toFixed(2)}</div>
+                                        <div style={{ fontSize: '0.5rem', opacity: 0.5 }}>PENDING</div>
+                                    </div>
+                                    <button className="admin-action-btn success" onClick={() => setActionModal({ action: 'send-withdraw', userId: u._id, username: u.username })}>
+                                        💸 Send Pay
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {payables.length === 0 && <p style={{ textAlign: 'center', padding: '2rem', opacity: 0.4 }}>No pending withdrawals found.</p>}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="dash-container">
             {/* Notification Toast */}
@@ -415,6 +454,7 @@ const AdminPanel = ({ onBack }) => {
                         { id: 'stats', label: 'Stats', icon: <BarChart3 size={14} /> },
                         { id: 'users', label: `Users (${users.length})`, icon: <Users size={14} /> },
                         { id: 'claims', label: `Claims (${pendingClaimsCount})`, icon: <FileText size={14} /> },
+                        { id: 'payouts', label: `Payouts`, icon: <Wallet size={14} /> },
                     ].map(tab => (
                         <button key={tab.id} onClick={() => setAdminTab(tab.id)}
                             className={adminTab === tab.id ? 'lux-btn-gold' : 'lux-btn-ghost'}
@@ -430,7 +470,8 @@ const AdminPanel = ({ onBack }) => {
                 {loading ? <p style={{ textAlign: 'center', padding: '2rem' }}>Syncing...</p> :
                     adminTab === 'stats' ? renderStats() :
                         adminTab === 'users' ? renderUsers() :
-                            renderClaims()
+                            adminTab === 'claims' ? renderClaims() :
+                                renderPayouts()
                 }
             </div>
 
