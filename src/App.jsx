@@ -793,9 +793,11 @@ function App() {
       if (response.ok) {
         const userData = await response.json();
         setUser(userData);
-        if (userData.meta?.maintenance_mode && !userData.isAdmin) setView('maintenance');
-        // Auto-pivot to Dashboard if we just found an active session on the home screen
-        if (view === 'home') setView('dash');
+        if (userData.meta?.maintenance_mode && !userData.isAdmin) {
+          setView('maintenance');
+        }
+        // NOTE: Do NOT auto-switch views here.
+        // Navigation between vault (home) and dashboard is controlled purely by user actions.
       } else {
         // Token invalid/expired — clear it
         localStorage.removeItem('nexlink_token');
@@ -804,7 +806,7 @@ function App() {
     } catch (err) {
       console.error("Identity sync unreachable", err);
     }
-  }, [view]); // FIXED: Added view as dependency to prevent closure of old view state
+  }, [view]); // keep dependency to avoid stale closures, but no forced navigation
 
   // Initial load
   useEffect(() => {
