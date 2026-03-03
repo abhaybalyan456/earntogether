@@ -54,6 +54,15 @@ const BOT_TOKEN = '8557258761:AAEW86mB6roop4mX40ezfzCfn-5Z_nhfcOs';
 const ADMIN_CHAT_ID = '1889181876';
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+// --- CRASH HANDLERS: Telegram Network Stability ---
+bot.on('polling_error', (error) => {
+    console.error('📡 [TELEGRAM POLLING ERROR]', error?.code, error?.message || error);
+});
+
+bot.on('error', (error) => {
+    console.error('👾 [TELEGRAM BOT ERROR]', error?.code, error?.message || error);
+});
+
 // --- TELEGRAM BOT LOGIC ---
 
 // Helper: Mirror Database to Telegram Cloud
