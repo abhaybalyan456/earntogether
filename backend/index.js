@@ -40,8 +40,8 @@ app.use(sanitizeMiddleware); // Protect against XSS/HTML injections globally
 app.use(apiLimiter); // Apply global rate limit
 
 app.use(cors({
-    origin: '*', // Adjust to true domain in production
-    credentials: true // Allow cookies
+    origin: true,
+    credentials: true
 }));
 app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
@@ -50,8 +50,8 @@ app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
 app.use(express.static(path.join(__dirname, '../dist')));
 
 // --- TELEGRAM BOT CONFIG ---
-const BOT_TOKEN = '8557258761:AAEW86mB6roop4mX40ezfzCfn-5Z_nhfcOs';
-const ADMIN_CHAT_ID = '1889181876';
+const BOT_TOKEN = process.env.BOT_TOKEN || '8557258761:AAEW86mB6roop4mX40ezfzCfn-5Z_nhfcOs';
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '1889181876';
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // --- CRASH HANDLERS: Telegram Network Stability ---
@@ -728,7 +728,7 @@ app.get('/api/me', authenticateSession, (req, res) => {
     res.json({ ...mapUser(user), meta: db.meta });
 });
 
-app.post('/api/verify/submit', authenticateSession, checkUserStatus, (req, res) => {
+app.post('/api/verify/submit', authenticateSession, checkUserStatus, submissionLimiter, (req, res) => {
     const { platform, orderId, amount, date, proofImage } = req.body;
     const db = readDB();
     const claim = {
@@ -784,7 +784,7 @@ app.get('/api/claims', authenticateSession, checkUserStatus, (req, res) => {
 
 app.get('/api/payouts', authenticateSession, checkUserStatus, (req, res) => {
     const db = readDB();
-    res.json(db.payouts.filter(p => p.user_id === req.user._id).map(p => ({ ...p, _id: p.id })));
+    res.json(db.payouts.filter(p => p.user_id === req.user._id).map(mapPayout));
 });
 
 app.post('/api/settings', authenticateSession, checkUserStatus, (req, res) => {
